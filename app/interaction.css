@@ -1,0 +1,3 @@
+.flow-mode .graph-node:not(.selected) { opacity: .35; }
+.flow-mode .connector { height: 3px; box-shadow: 0 0 10px var(--mint); }
+.steps li { cursor: pointer; }
