@@ -17,7 +17,8 @@ export type AnalyzerNode = {
   meta: string;
 };
 
-export type AnalyzerEdge = { from: string; to: string; dashed?: boolean };
+export type RelationshipKind = "import" | "render" | "data" | "callback" | "api" | "route";
+export type AnalyzerEdge = { from: string; to: string; dashed?: boolean; kind?: RelationshipKind; label?: string; line?: number };
 
 export type AnalyzerDetail = {
   name?: string;
@@ -55,13 +56,16 @@ export type AnalyzerProgress = {
   stage: 1 | 2 | 3 | 4;
   components?: number;
   imports?: number;
+  processedFiles?: number;
+  totalFiles?: number;
+  cachedFiles?: number;
 };
 
 type FileFacts = {
   file: string;
   source: string;
   name: string;
-  imports: Array<{ specifier: string; line: number; endLine: number; lazy?: boolean }>;
+  imports: Array<{ specifier: string; line: number; endLine: number; lazy?: boolean; bindings?: string[] }>;
   assets: Set<string>;
   hooks: Set<string>;
   hookRanges: Map<string, { line: number; endLine: number }>;
@@ -86,7 +90,23 @@ type FileFacts = {
   jsxEndLine: number;
   hasJsx: boolean;
   issues: AnalyzerIssue[];
+  stateBindings: Array<{ value: string; updater: string; initial: string; line: number; endLine: number }>;
+  apiRequests: Array<{ method: string; target: string; line: number; endLine: number }>;
+  eventBindings: Array<{ event: string; handler: string; line: number; endLine: number }>;
+  renderedProps: Array<{ component: string; props: string[]; line: number; endLine: number }>;
+  effectDependencies: Array<{ dependencies: string[]; line: number; endLine: number }>;
 };
+
+const fileFactsCache = new Map<string, { source: string; facts: FileFacts }>();
+
+function cachedParseFile(file: string, source: string) {
+  const cached = fileFactsCache.get(file);
+  if (cached?.source === source) return { facts: cached.facts, cached: true };
+  const facts = parseFile(file, source);
+  fileFactsCache.set(file, { source, facts });
+  if (fileFactsCache.size > 2_000) fileFactsCache.delete(fileFactsCache.keys().next().value as string);
+  return { facts, cached: false };
+}
 
 const SOURCE_FILE_PATTERN = /\.(tsx?|jsx?)$/i;
 const SOURCE_EXTENSION_PATTERN = /\.(tsx?|jsx?)$/i;
@@ -155,6 +175,20 @@ function calleeName(node: t.Expression | t.V8IntrinsicIdentifier | t.Super | nul
   return "";
 }
 
+function expressionLabel(node: t.Node | null | undefined): string {
+  if (!node) return "an empty value";
+  if (t.isIdentifier(node)) return node.name;
+  if (t.isStringLiteral(node) || t.isNumericLiteral(node) || t.isBooleanLiteral(node)) return JSON.stringify(node.value);
+  if (t.isNullLiteral(node)) return "null";
+  if (t.isMemberExpression(node) || t.isOptionalMemberExpression(node)) return calleeName(node);
+  if (t.isCallExpression(node)) return `${calleeName(node.callee) || "a function"}()`;
+  if (t.isTemplateLiteral(node)) return node.expressions.length ? "a dynamic template value" : JSON.stringify(node.quasis[0]?.value.cooked ?? "");
+  if (t.isObjectExpression(node)) return "an object";
+  if (t.isArrayExpression(node)) return "an array";
+  if (t.isArrowFunctionExpression(node) || t.isFunctionExpression(node)) return "a callback";
+  return "a computed value";
+}
+
 function addPropsFromPattern(pattern: t.PatternLike | null | undefined, props: Set<string>) {
   if (!pattern || !t.isObjectPattern(pattern)) return;
   pattern.properties.forEach((property) => {
@@ -176,6 +210,12 @@ function sourceLine(source: string, pattern: RegExp, fallback = 1) {
   return source.slice(0, match.index).split("\n").length;
 }
 
+function frameworkNoteLine(source: string, text: string) {
+  const identifiers = ["getServerSideProps", "getStaticProps", "getStaticPaths", "generateStaticParams", "generateMetadata", "revalidate", "dynamic", "runtime", "use server", "createSignal", "createEffect", "createMemo", "createResource", "createStore", "createContext", "onMount", "onCleanup", "createServerAction", "_template", "_init", "_active", "_inactive", "_focus", "_unfocus", "_handle"];
+  const identifier = identifiers.find((value) => text.includes(value));
+  return identifier ? sourceLine(source, new RegExp(escapePattern(identifier))) : 1;
+}
+
 function escapePattern(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -189,6 +229,11 @@ function parseFile(file: string, source: string): FileFacts {
   const renderRanges = new Map<string, { line: number; endLine: number }>();
   const propNames = new Set<string>();
   const issues: AnalyzerIssue[] = [];
+  const stateBindings: FileFacts["stateBindings"] = [];
+  const apiRequests: FileFacts["apiRequests"] = [];
+  const eventBindings: FileFacts["eventBindings"] = [];
+  const renderedProps: FileFacts["renderedProps"] = [];
+  const effectDependencies: FileFacts["effectDependencies"] = [];
   const nameCandidates: Array<{ name: string; priority: number; line: number; endLine: number }> = [];
   const reactHookAliases = new Map<string, string>();
   let stateCount = 0;
@@ -232,7 +277,7 @@ function parseFile(file: string, source: string): FileFacts {
       ImportDeclaration(path) {
         const declaration = path.node;
         const hasRuntimeImport = declaration.specifiers.length === 0 || declaration.specifiers.some((specifier) => !t.isImportSpecifier(specifier) || specifier.importKind !== "type");
-        if (declaration.importKind !== "type" && hasRuntimeImport) imports.push({ specifier: declaration.source.value, line: declaration.loc?.start.line ?? 1, endLine: declaration.loc?.end.line ?? declaration.loc?.start.line ?? 1 });
+        if (declaration.importKind !== "type" && hasRuntimeImport) imports.push({ specifier: declaration.source.value, line: declaration.loc?.start.line ?? 1, endLine: declaration.loc?.end.line ?? declaration.loc?.start.line ?? 1, bindings: declaration.specifiers.map((specifier) => specifier.local.name) });
         if (!isSourceSpecifier(declaration.source.value) && (declaration.source.value.startsWith(".") || declaration.source.value.startsWith("/"))) assets.add(declaration.source.value);
         if (declaration.source.value === "react") {
           declaration.specifiers.forEach((specifier) => {
@@ -243,7 +288,7 @@ function parseFile(file: string, source: string): FileFacts {
         }
       },
       ExportNamedDeclaration(path) {
-        const hasRuntimeExport = path.node.specifiers.length === 0 || path.node.specifiers.some((specifier) => specifier.exportKind !== "type");
+        const hasRuntimeExport = path.node.specifiers.length === 0 || path.node.specifiers.some((specifier) => !t.isExportSpecifier(specifier) || specifier.exportKind !== "type");
         if (path.node.source && path.node.exportKind !== "type" && hasRuntimeExport) imports.push({ specifier: path.node.source.value, line: path.node.loc?.start.line ?? 1, endLine: path.node.loc?.end.line ?? path.node.loc?.start.line ?? 1 });
         const name = declarationName(path.node.declaration);
         if (name) nameCandidates.push({ name, priority: 80, line: path.node.declaration?.loc?.start.line ?? path.node.loc?.start.line ?? 1, endLine: path.node.declaration?.loc?.end.line ?? path.node.loc?.end.line ?? 1 });
@@ -265,8 +310,17 @@ function parseFile(file: string, source: string): FileFacts {
         if (name) nameCandidates.push({ name, priority: /^[A-Z]/.test(name) ? 60 : 20, line: path.node.loc?.start.line ?? 1, endLine: path.node.loc?.end.line ?? path.node.loc?.start.line ?? 1 });
       },
       VariableDeclarator(path) {
-        if (!t.isIdentifier(path.node.id)) return;
         const initializer = path.node.init;
+        if (t.isArrayPattern(path.node.id) && t.isCallExpression(initializer)) {
+          const called = calleeName(initializer.callee);
+          const canonicalHook = reactHookAliases.get(called) ?? called.split(".").at(-1) ?? called;
+          if (canonicalHook === "useState" || canonicalHook === "useReducer") {
+            const value = t.isIdentifier(path.node.id.elements[0]) ? path.node.id.elements[0].name : "state";
+            const updater = t.isIdentifier(path.node.id.elements[1]) ? path.node.id.elements[1].name : canonicalHook === "useReducer" ? "dispatch" : "state updater";
+            stateBindings.push({ value, updater, initial: expressionLabel(initializer.arguments[0] && t.isExpression(initializer.arguments[0]) ? initializer.arguments[0] : null), line: path.node.loc?.start.line ?? 1, endLine: path.node.loc?.end.line ?? path.node.loc?.start.line ?? 1 });
+          }
+        }
+        if (!t.isIdentifier(path.node.id)) return;
         if (!t.isArrowFunctionExpression(initializer) && !t.isFunctionExpression(initializer)) return;
         const name = path.node.id.name;
         nameCandidates.push({ name, priority: /^[A-Z]|^use[A-Z]/.test(name) ? 60 : 20, line: path.node.loc?.start.line ?? 1, endLine: path.node.loc?.end.line ?? path.node.loc?.start.line ?? 1 });
@@ -282,13 +336,34 @@ function parseFile(file: string, source: string): FileFacts {
         if (/^use[A-Z]/.test(canonicalHook)) { hooks.add(canonicalHook); if (!hookRanges.has(canonicalHook)) hookRanges.set(canonicalHook, { line, endLine }); }
         if (canonicalHook === "useState" || canonicalHook === "useReducer") { stateCount += 1; if (!stateLine) { stateLine = line; stateEndLine = endLine; } }
         if (["useEffect", "useLayoutEffect", "useInsertionEffect"].includes(canonicalHook)) { effectCount += 1; if (!effectLine) { effectLine = line; effectEndLine = endLine; } }
-        if (called === "fetch" || /^axios\.(get|post|put|patch|delete|request)$/.test(called)) { apiCount += 1; if (!apiLine) { apiLine = line; apiEndLine = endLine; } }
+        if (["useEffect", "useLayoutEffect", "useInsertionEffect"].includes(canonicalHook)) {
+          const dependencyNode = path.node.arguments[1];
+          if (t.isArrayExpression(dependencyNode)) effectDependencies.push({ dependencies: dependencyNode.elements.filter((item): item is t.Expression => Boolean(item && t.isExpression(item))).map(expressionLabel), line, endLine });
+        }
+        if (called === "fetch" || /^axios\.(get|post|put|patch|delete|request)$/.test(called)) {
+          apiCount += 1; if (!apiLine) { apiLine = line; apiEndLine = endLine; }
+          let method = called === "fetch" ? "GET" : called.split(".").at(-1) ?? "request";
+          if (called === "fetch" && t.isObjectExpression(path.node.arguments[1])) {
+            const methodProperty = path.node.arguments[1].properties.find((property) => t.isObjectProperty(property) && (t.isIdentifier(property.key, { name: "method" }) || t.isStringLiteral(property.key, { value: "method" })));
+            if (methodProperty && t.isObjectProperty(methodProperty) && t.isStringLiteral(methodProperty.value)) method = methodProperty.value.value;
+          }
+          const argument = path.node.arguments[0];
+          apiRequests.push({ method: method.toUpperCase(), target: argument && t.isExpression(argument) ? expressionLabel(argument) : "a dynamic endpoint", line, endLine });
+        }
       },
       JSXElement(path) {
         hasJsx = true;
         if (!jsxLine) { jsxLine = path.node.loc?.start.line ?? 1; jsxEndLine = path.node.loc?.end.line ?? jsxLine; }
         const nameNode = path.node.openingElement.name;
-        if (t.isJSXIdentifier(nameNode) && /^[A-Z]/.test(nameNode.name)) { renderedComponents.add(nameNode.name); if (!renderRanges.has(nameNode.name)) renderRanges.set(nameNode.name, { line: path.node.loc?.start.line ?? 1, endLine: path.node.loc?.end.line ?? path.node.loc?.start.line ?? 1 }); }
+        if (t.isJSXIdentifier(nameNode) && /^[A-Z]/.test(nameNode.name)) {
+          renderedComponents.add(nameNode.name); if (!renderRanges.has(nameNode.name)) renderRanges.set(nameNode.name, { line: path.node.loc?.start.line ?? 1, endLine: path.node.loc?.end.line ?? path.node.loc?.start.line ?? 1 });
+          const props = path.node.openingElement.attributes.flatMap((attribute) => {
+            if (!t.isJSXAttribute(attribute) || !t.isJSXIdentifier(attribute.name)) return [];
+            const value = t.isJSXExpressionContainer(attribute.value) && t.isExpression(attribute.value.expression) ? expressionLabel(attribute.value.expression) : t.isStringLiteral(attribute.value) ? JSON.stringify(attribute.value.value) : attribute.value ? "a value" : "true";
+            return [`${attribute.name.name} ← ${value}`];
+          });
+          if (props.length) renderedProps.push({ component: nameNode.name, props, line: path.node.loc?.start.line ?? 1, endLine: path.node.loc?.end.line ?? path.node.loc?.start.line ?? 1 });
+        }
         if (t.isJSXMemberExpression(nameNode)) {
           let current: t.JSXIdentifier | t.JSXMemberExpression = nameNode;
           while (t.isJSXMemberExpression(current)) current = current.object;
@@ -298,7 +373,11 @@ function parseFile(file: string, source: string): FileFacts {
       JSXFragment(path) { hasJsx = true; if (!jsxLine) { jsxLine = path.node.loc?.start.line ?? 1; jsxEndLine = path.node.loc?.end.line ?? jsxLine; } },
       JSXAttribute(path) {
         if (!t.isJSXIdentifier(path.node.name)) return;
-        if (/^on[A-Z]/.test(path.node.name.name)) { eventCount += 1; if (!eventLine) { eventLine = path.node.loc?.start.line ?? 1; eventEndLine = path.node.loc?.end.line ?? eventLine; } }
+        if (/^on[A-Z]/.test(path.node.name.name)) {
+          eventCount += 1; if (!eventLine) { eventLine = path.node.loc?.start.line ?? 1; eventEndLine = path.node.loc?.end.line ?? eventLine; }
+          const expression = t.isJSXExpressionContainer(path.node.value) && t.isExpression(path.node.value.expression) ? expressionLabel(path.node.value.expression) : "a callback";
+          eventBindings.push({ event: path.node.name.name, handler: expression, line: path.node.loc?.start.line ?? 1, endLine: path.node.loc?.end.line ?? path.node.loc?.start.line ?? 1 });
+        }
         if (/^(src|href|poster)$/i.test(path.node.name.name) && t.isStringLiteral(path.node.value)) assets.add(path.node.value.value);
       },
     });
@@ -324,7 +403,7 @@ function parseFile(file: string, source: string): FileFacts {
   const fallbackName = displayNameForFile(file);
   const selectedDeclaration = nameCandidates.sort((left, right) => right.priority - left.priority)[0];
   const name = selectedDeclaration?.name || fallbackName;
-  return { file, source, name, imports, assets, hooks, hookRanges, renderedComponents, renderRanges, propNames, stateCount, effectCount, eventCount, apiCount, stateLine, effectLine, eventLine, apiLine, stateEndLine, effectEndLine, eventEndLine, apiEndLine, declarationLine: selectedDeclaration?.line ?? 1, declarationEndLine: selectedDeclaration?.endLine ?? selectedDeclaration?.line ?? 1, jsxLine, jsxEndLine, hasJsx, issues };
+  return { file, source, name, imports, assets, hooks, hookRanges, renderedComponents, renderRanges, propNames, stateCount, effectCount, eventCount, apiCount, stateLine, effectLine, eventLine, apiLine, stateEndLine, effectEndLine, eventEndLine, apiEndLine, declarationLine: selectedDeclaration?.line ?? 1, declarationEndLine: selectedDeclaration?.endLine ?? selectedDeclaration?.line ?? 1, jsxLine, jsxEndLine, hasJsx, issues, stateBindings, apiRequests, eventBindings, renderedProps, effectDependencies };
 }
 
 function classifyFile(facts: FileFacts): NodeKind {
@@ -341,10 +420,36 @@ function isSourceSpecifier(specifier: string) {
   return !/\.[a-z0-9]+$/i.test(specifier) || SOURCE_EXTENSION_PATTERN.test(specifier);
 }
 
+function dependencyCycles(edges: AnalyzerEdge[]) {
+  const adjacency = new Map<string, string[]>();
+  edges.forEach((edge) => adjacency.set(edge.from, [...(adjacency.get(edge.from) ?? []), edge.to]));
+  const visited = new Set<string>();
+  const active = new Set<string>();
+  const stack: string[] = [];
+  const cycles = new Map<string, string[]>();
+  const visit = (node: string) => {
+    if (active.has(node)) {
+      const start = stack.indexOf(node);
+      const cycle = [...stack.slice(start), node];
+      const core = cycle.slice(0, -1);
+      const rotations = core.map((_, index) => [...core.slice(index), ...core.slice(0, index)]);
+      rotations.sort((left, right) => left.join("→").localeCompare(right.join("→")));
+      cycles.set(rotations[0].join("→"), [...rotations[0], rotations[0][0]]);
+      return;
+    }
+    if (visited.has(node)) return;
+    visited.add(node); active.add(node); stack.push(node);
+    (adjacency.get(node) ?? []).forEach(visit);
+    stack.pop(); active.delete(node);
+  };
+  Array.from(adjacency.keys()).forEach(visit);
+  return Array.from(cycles.values()).slice(0, 20);
+}
+
 export function analyzeSources(sources: Record<string, string>, aliases: Record<string, string> = {}, bundlerTools: string[] = []): AnalysisResult {
   const files = Object.keys(sources).filter((file) => SOURCE_FILE_PATTERN.test(file) && !/\.d\.ts$/i.test(file) && !TOOL_CONFIG_PATTERN.test(file));
   const allFiles = Object.keys(sources);
-  const facts = files.map((file) => parseFile(file, sources[file]));
+  const facts = files.map((file) => cachedParseFile(file, sources[file]).facts);
   const factsByFile = Object.fromEntries(facts.map((entry) => [entry.file, entry]));
   const nodes: AnalyzerNode[] = facts.map((entry) => {
     const kind = classifyFile(entry);
@@ -370,7 +475,13 @@ export function analyzeSources(sources: Record<string, string>, aliases: Record<
         return;
       }
       if (target !== entry.file && !edges.some((edge) => edge.from === entry.file && edge.to === target)) {
-        edges.push({ from: entry.file, to: target, dashed: classifyFile(factsByFile[target]) === "Hook" });
+        const targetKind = classifyFile(factsByFile[target]);
+        const targetName = factsByFile[target].name;
+        const rendered = entry.renderedComponents.has(targetName);
+        const callback = entry.renderedProps.some((renderedEntry) => renderedEntry.component === targetName && renderedEntry.props.some((prop) => /^on[A-Z]/.test(prop)));
+        const kind: RelationshipKind = targetKind === "Hook" ? "data" : targetKind === "Service" ? "api" : callback ? "callback" : rendered ? "render" : "import";
+        const label = kind === "data" ? "Hook data" : kind === "api" ? "API/service" : kind === "callback" ? "Callback props" : kind === "render" ? "Renders component" : "Runtime import";
+        edges.push({ from: entry.file, to: target, dashed: kind === "data", kind, label, line });
       }
     });
   });
@@ -385,7 +496,14 @@ export function analyzeSources(sources: Record<string, string>, aliases: Record<
     const explanations: AnalyzerDetail["explanations"] = [];
     const explain = (text: string, line: number, kind: AnalyzerDetail["explanations"][number]["kind"], endLine = line) => { steps.push(text); explanations.push({ text, line, endLine: Math.max(line, endLine), kind }); };
     explain(`${node.name} is declared in ${node.file}.`, entry.declarationLine, "declaration", entry.declarationEndLine);
-    if (outgoing.length) explain(`It imports or depends on ${outgoing.join(", ")}.`, entry.imports[0]?.line ?? 1, "import", entry.imports[0]?.endLine ?? entry.imports[0]?.line ?? 1);
+    if (incoming.length) explain(`This file is referenced by ${incoming.join(", ")}; those parents use its exported behavior, which creates the incoming graph connection.`, entry.declarationLine, "export", entry.declarationEndLine);
+    const connectedImports = entry.imports.map((item) => ({ item, target: resolveLocalImport(entry.file, item.specifier, allFiles, aliases) })).filter(({ target }) => Boolean(target && nodeById[target]));
+    connectedImports.slice(0, 8).forEach(({ item, target }) => {
+      const targetNode = nodeById[target];
+      const bindings = item.bindings?.length ? item.bindings.join(", ") : targetNode.name;
+      explain(`It imports ${bindings} from ${target}; this is why ${node.name} connects to ${targetNode.name}.`, item.line, "import", item.endLine);
+    });
+    if (outgoing.length && connectedImports.length === 0) explain(`It depends on ${outgoing.join(", ")}; those modules provide behavior used by this file.`, entry.imports[0]?.line ?? 1, "import", entry.imports[0]?.endLine ?? entry.imports[0]?.line ?? 1);
     if (entry.renderedComponents.size) {
       const firstRendered = Array.from(entry.renderedComponents)[0];
       const range = entry.renderRanges.get(firstRendered);
@@ -396,11 +514,14 @@ export function analyzeSources(sources: Record<string, string>, aliases: Record<
       const range = entry.hookRanges.get(firstHook);
       explain(`It calls ${Array.from(entry.hooks).join(", ")}.`, range?.line ?? sourceLine(entry.source, new RegExp(`\\b${escapePattern(firstHook)}\\s*\\(`)), "hook", range?.endLine);
     }
-    if (entry.propNames.size) explain(`It receives ${Array.from(entry.propNames).join(", ")} as props.`, entry.declarationLine, "props", entry.declarationEndLine);
-    if (entry.stateCount) explain(`It initializes ${entry.stateCount} local state value${entry.stateCount === 1 ? "" : "s"}.`, entry.stateLine || 1, "state", entry.stateEndLine || entry.stateLine || 1);
-    if (entry.effectCount) explain(`It runs ${entry.effectCount} React effect${entry.effectCount === 1 ? "" : "s"}.`, entry.effectLine || 1, "effect", entry.effectEndLine || entry.effectLine || 1);
-    if (entry.eventCount) explain(`It declares ${entry.eventCount} interface event handler${entry.eventCount === 1 ? "" : "s"}.`, entry.eventLine || 1, "event", entry.eventEndLine || entry.eventLine || 1);
-    if (entry.apiCount) explain(`It performs ${entry.apiCount} API request${entry.apiCount === 1 ? "" : "s"}.`, entry.apiLine || 1, "api", entry.apiEndLine || entry.apiLine || 1);
+    if (entry.propNames.size) explain(`It receives ${Array.from(entry.propNames).join(", ")} from ${incoming.length ? incoming.join(", ") : "its parent caller"}; these values enter the file through its props.`, entry.declarationLine, "props", entry.declarationEndLine);
+    entry.stateBindings.forEach((state) => explain(`${state.value} starts with ${state.initial}; calling ${state.updater} is what changes this state and triggers the dependent UI to update.`, state.line, "state", state.endLine));
+    if (entry.stateCount && entry.stateBindings.length === 0) explain(`It initializes ${entry.stateCount} local state value${entry.stateCount === 1 ? "" : "s"}.`, entry.stateLine || 1, "state", entry.stateEndLine || entry.stateLine || 1);
+    entry.effectDependencies.forEach((effect) => explain(effect.dependencies.length ? `This effect reruns when ${effect.dependencies.join(", ")} changes, then synchronizes the component with an external side effect.` : "This effect has no dependency list, so it runs after every completed render.", effect.line, "effect", effect.endLine));
+    if (entry.effectCount && entry.effectDependencies.length === 0) explain(`It runs ${entry.effectCount} effect${entry.effectCount === 1 ? "" : "s"} to synchronize behavior outside rendering.`, entry.effectLine || 1, "effect", entry.effectEndLine || entry.effectLine || 1);
+    entry.eventBindings.slice(0, 8).forEach((event) => explain(`${event.event} sends the user interaction to ${event.handler}; this is the event path that starts the next update.`, event.line, "event", event.endLine));
+    entry.apiRequests.slice(0, 8).forEach((request) => explain(`It sends a ${request.method} API request to ${request.target}; the returned data continues through the surrounding promise, effect, or state update.`, request.line, "api", request.endLine));
+    entry.renderedProps.slice(0, 8).forEach((rendered) => explain(`It passes ${rendered.props.join(", ")} into ${rendered.component}; this is how data leaves ${node.name} and enters the child component.`, rendered.line, "render", rendered.endLine));
     const lazyImports = entry.imports.filter((item) => item.lazy).map((item) => item.specifier);
     const aliasedAssets = entry.imports.filter((item) => !isSourceSpecifier(item.specifier) && Object.keys(aliases).some((alias) => item.specifier === alias || item.specifier.startsWith(`${alias}/`))).map((item) => item.specifier);
     const assetDependencies = Array.from(new Set([...entry.assets, ...aliasedAssets]));
@@ -448,18 +569,43 @@ export function analyzeSources(sources: Record<string, string>, aliases: Record<
 }
 
 export async function analyzeProjectSources(sources: Record<string, string>, onProgress: (progress: AnalyzerProgress) => void = () => undefined): Promise<AnalysisResult> {
-  const [{ analyzeTypeScriptSemantics }, { analyzeESLint }, { analyzeBundlerConfig }, { analyzeNextProject }] = await Promise.all([
+  const [{ analyzeTypeScriptSemantics }, { analyzeESLint }, { analyzeBundlerConfig }, { analyzeNextProject }, { analyzeAdditionalFrameworks }] = await Promise.all([
     import("./semantic"),
     import("./eslint"),
     import("./bundler"),
     import("./next"),
+    import("./frameworks"),
   ]);
+  const sourceFiles = Object.keys(sources).filter((file) => /\.[jt]sx?$/.test(file));
+  const cachedFiles = sourceFiles.filter((file) => fileFactsCache.get(file)?.source === sources[file]).length;
   const bundler = analyzeBundlerConfig(sources);
-  onProgress({ stage: 1 });
+  onProgress({ stage: 1, processedFiles: cachedFiles, totalFiles: sourceFiles.length, cachedFiles });
   const result = analyzeSources(sources, bundler.aliases, bundler.tools);
-  const componentCount = result.nodes.filter((node) => node.kind === "Component" || node.kind === "Page").length;
-  onProgress({ stage: 2, components: componentCount, imports: result.edges.length });
+  const astEdges = new Map(result.edges.map((edge) => [`${edge.from}\0${edge.to}`, edge]));
+  let componentCount = result.nodes.filter((node) => node.kind === "Component" || node.kind === "Page").length;
+  onProgress({ stage: 2, components: componentCount, imports: result.edges.length, processedFiles: sourceFiles.length, totalFiles: sourceFiles.length, cachedFiles });
   const next = analyzeNextProject(sources);
+  const additionalFrameworks = analyzeAdditionalFrameworks(sources);
+  additionalFrameworks.forEach((framework) => Object.entries(framework.files).forEach(([file, info]) => {
+    if (result.nodes.some((node) => node.file === file)) return;
+    const name = file.split("/").at(-1)?.replace(/\.(?:vue|astro)$/i, "") || "Component";
+    const [icon, tone] = kindStyle(info.kind);
+    result.nodes.push({ id: file, name, file, kind: info.kind, icon, tone, meta: [info.role, info.route, info.rendering].filter(Boolean).join(" · ") });
+    result.details[file] = {
+      name,
+      file,
+      type: info.kind,
+      parent: "Application",
+      children: "None",
+      metrics: ["0 dependents", "0 dependencies", "0 local state", "0 effects & events"],
+      steps: [...info.notes],
+      explanations: info.notes.map((text, index) => ({ text, line: Math.max(1, index + 1), endLine: Math.max(1, index + 1), kind: "render" as const })),
+      source: sources[file],
+      relations: { usedBy: [], dependsOn: [], resources: [] },
+      insights: { props: [], hooks: [], exports: [], diagnostics: [], bundler: [], framework: [framework.variant || framework.name, info.role, info.route ?? "", info.rendering ?? ""].filter(Boolean) },
+    };
+  }));
+  componentCount = result.nodes.filter((node) => node.kind === "Component" || node.kind === "Page").length;
   result.nodes.forEach((node) => {
     const info = next.files[node.file];
     if (!info) return;
@@ -472,6 +618,27 @@ export async function analyzeProjectSources(sources: Record<string, string>, onP
     detail.type = info.kind;
     detail.steps.push(...info.notes);
     detail.insights.framework = [`Next.js ${next.router}`, info.role, info.route, info.rendering];
+    info.notes.forEach((text) => { const line = frameworkNoteLine(detail.source, text); detail.explanations.push({ text, line, endLine: line, kind: "render" }); });
+  });
+  additionalFrameworks.forEach((framework) => result.nodes.forEach((node) => {
+    if (next.files[node.file]) return;
+    const info = framework.files[node.file];
+    if (!info) return;
+    node.kind = info.kind;
+    const [icon, tone] = kindStyle(info.kind);
+    node.icon = icon;
+    node.tone = tone;
+    node.meta = [info.role, info.route, info.rendering].filter(Boolean).join(" · ");
+    const detail = result.details[node.id];
+    detail.type = info.kind;
+    detail.steps.push(...info.notes);
+    info.notes.forEach((text) => { const line = frameworkNoteLine(detail.source, text); detail.explanations.push({ text, line, endLine: line, kind: "render" }); });
+    detail.insights.framework = [framework.variant || framework.name, info.role, info.route ?? "", info.rendering ?? ""].filter(Boolean);
+  }));
+  const reactDetected = Object.entries(sources).some(([file, source]) => /(^|\/)package\.json$/i.test(file) ? /["']react["']\s*:/.test(source) : /from\s+["']react(?:\/[^"']*)?["']|require\(["']react/.test(source));
+  if (reactDetected) result.nodes.forEach((node) => {
+    const detail = result.details[node.id];
+    if (detail && detail.insights.framework.length === 0) detail.insights.framework = ["React"];
   });
   let semantic: ReturnType<typeof analyzeTypeScriptSemantics> = { files: {}, issues: [] };
   let lintIssues: AnalyzerIssue[] = [];
@@ -505,12 +672,45 @@ export async function analyzeProjectSources(sources: Record<string, string>, onP
   Object.entries(semantic.files).forEach(([file, info]) => {
     info.dependencies.forEach((dependency) => {
       if (!nodeByFile[file] || !nodeByFile[dependency] || result.edges.some((edge) => edge.from === file && edge.to === dependency)) return;
-      result.edges.push({ from: file, to: dependency, dashed: nodeByFile[dependency].kind === "Hook" });
+      const astEdge = astEdges.get(`${file}\0${dependency}`);
+      const fallbackKind: RelationshipKind = nodeByFile[dependency].kind === "Hook" ? "data" : nodeByFile[dependency].kind === "Service" ? "api" : "import";
+      result.edges.push(astEdge ?? { from: file, to: dependency, dashed: fallbackKind === "data", kind: fallbackKind, label: fallbackKind === "data" ? "Hook data" : fallbackKind === "api" ? "API/service" : "Runtime import" });
     });
   });
   next.edges.forEach((edge) => {
     if (!nodeByFile[edge.from] || !nodeByFile[edge.to] || result.edges.some((existing) => existing.from === edge.from && existing.to === edge.to)) return;
     result.edges.push(edge);
+  });
+  additionalFrameworks.flatMap((framework) => framework.edges).forEach((edge) => {
+    if (!nodeByFile[edge.from] || !nodeByFile[edge.to] || result.edges.some((existing) => existing.from === edge.from && existing.to === edge.to)) return;
+    result.edges.push(edge);
+  });
+  dependencyCycles(result.edges).forEach((cycle) => {
+    const message = `Circular dependency: ${cycle.join(" → ")}. This can expose partially initialized exports and make changes harder to isolate.`;
+    const firstFile = cycle[0];
+    const issue: AnalyzerIssue = { title: "Circular dependency", file: firstFile, line: result.edges.find((edge) => edge.from === firstFile && edge.to === cycle[1])?.line ?? 1, detail: cycle.join(" → "), source: "ast", severity: "warning" };
+    result.issues.push(issue);
+    cycle.slice(0, -1).forEach((file, index) => {
+      const node = nodeByFile[file];
+      const detail = node ? result.details[node.id] : undefined;
+      if (!detail) return;
+      const line = result.edges.find((edge) => edge.from === file && edge.to === cycle[index + 1])?.line ?? 1;
+      detail.insights.diagnostics.push({ ...issue, file, line });
+      detail.steps.push(message);
+      detail.explanations.push({ text: message, line, endLine: line, kind: "diagnostic" });
+    });
+  });
+  result.nodes.forEach((node) => {
+    const hasIncoming = result.edges.some((edge) => edge.to === node.id);
+    const entryLike = node.kind === "Page" || /(^|\/)(?:index|main|app|root|entry-client|entry-server|layout|middleware)\.[jt]sx?$/i.test(node.file);
+    if (hasIncoming || entryLike) return;
+    const detail = result.details[node.id];
+    if (!detail) return;
+    const issue: AnalyzerIssue = { title: "Unreferenced runtime file", file: node.file, line: 1, detail: `${node.name} has no incoming runtime relationship. It may be an unused component, an external entry point, or loaded by a convention the analyzer has not recognized.`, source: "ast", severity: "info" };
+    result.issues.push(issue);
+    detail.insights.diagnostics.push(issue);
+    detail.steps.push(issue.detail);
+    detail.explanations.push({ text: issue.detail, line: 1, endLine: 1, kind: "diagnostic" });
   });
   onProgress({ stage: 4, components: componentCount, imports: result.edges.length });
   result.nodes.forEach((node) => {
@@ -547,7 +747,12 @@ export async function analyzeProjectSources(sources: Record<string, string>, onP
       const line = sourceLine(detail.source, new RegExp(`\\b${escapePattern(node.name)}\\b`));
       detail.explanations.push({ text, line, endLine: line, kind: "props" });
     }
-    if (info.referencedBy.length) detail.steps.push(`Its exported symbols are referenced by ${info.referencedBy.join(", ")}.`);
+    if (info.referencedBy.length) {
+      const text = `This file is referenced by ${info.referencedBy.join(", ")}; those modules use its exports, which creates the incoming connection to ${node.name}.`;
+      detail.steps.push(text);
+      const line = sourceLine(detail.source, /\bexport\b/, 1);
+      detail.explanations.push({ text, line, endLine: line, kind: "export" });
+    }
     if (info.exports.length) {
       const text = `It exports ${info.exports.join(", ")}.`;
       detail.steps.push(text);

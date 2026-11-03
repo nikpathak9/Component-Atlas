@@ -24,8 +24,9 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
-      <body className="antialiased">
+    <html lang="en" suppressHydrationWarning>
+      <body className="antialiased" suppressHydrationWarning>
+        <script dangerouslySetInnerHTML={{ __html: `try{var t=localStorage.getItem("component-atlas-theme");if(t==="light"||t==="dark"){document.documentElement.dataset.appTheme=t;document.body.dataset.appTheme=t}}catch(e){}` }} />
         {children}
       </body>
     </html>

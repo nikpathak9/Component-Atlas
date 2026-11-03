@@ -78,11 +78,18 @@ body[data-app-route="landing"] .app-shell {
 .landing-brand { display: flex; align-items: center; gap: 10px; color: #edf5f7; text-decoration: none; }
 .landing-brand img.logo { width: 34px; height: 34px; }
 .landing-brand strong { font-size: 16px; letter-spacing: -.02em; }
-.landing-nav-links { display: flex; align-items: center; gap: 26px; }
+.landing-nav-links { display: flex; align-items: center; gap: 22px; }
+.landing-nav-sections, .landing-nav-actions { display: flex; align-items: center; }
+.landing-nav-sections { gap: 24px; }
+.landing-nav-actions { gap: 10px; padding-left: 20px; border-left: 1px solid #21323e; }
 .landing-nav-links a { color: #8fa1ae; font-size: 13px; text-decoration: none; }
 .landing-nav-links a:hover { color: #dce6ec; }
 .landing-nav-links .landing-login { display: inline-flex; align-items: center; gap: 7px; color: #b8c7cf; font-weight: 600; }
 .landing-nav-links .landing-login svg { width: 16px; height: 16px; color: var(--mint); stroke-width: 1.9; }
+.landing-nav-links .landing-signup { height: 38px; display: inline-flex; align-items: center; gap: 8px; padding: 0 15px; border-radius: 7px; background: var(--mint); color: #06221c; font-size: 12px; font-weight: 700; }
+.landing-nav-links .landing-signup:hover { background: #4bd5b5; color: #052f28; }
+.landing-nav-links .landing-signup svg { width: 15px; height: 15px; }
+.landing-nav-links .landing-signup::after, .landing-nav-links .landing-login::after { display: none; }
 .landing-nav-links .landing-dashboard-link { height: 38px; display: inline-flex; align-items: center; gap: 8px; padding: 0 13px; border: 1px solid #2d4c4a; border-radius: 7px; background: #0c1d1d; color: #b9ddd5; font-size: 12px; font-weight: 600; }
 .landing-nav-links .landing-dashboard-link::after { display: none; }
 .landing-nav-links .landing-dashboard-link svg { width: 17px; height: 17px; color: var(--mint); stroke-width: 1.8; }
@@ -129,11 +136,17 @@ body[data-app-route="landing"] .app-shell {
 .hero-tour span { width: 22px; height: 22px; display: grid; place-items: center; border: 1px solid #405563; border-radius: 50%; color: #8ea1ae; font-size: 8px; }
 .hero-tour span svg { width: 10px; height: 10px; fill: currentColor; }
 .hero-tour:hover { border-color: #527086; background: #111f2a; }
-.hero-support { display: flex; flex-wrap: wrap; align-items: center; gap: 0; margin-top: 18px; color: #758b86; font: 9px "Poppins"; }
-.hero-support span { display: inline-flex; align-items: center; gap: 5px; padding: 0 12px; border-right: 1px solid #26343e; }
+.hero-support { width: max-content; max-width: 100%; display: flex; flex-wrap: nowrap; align-items: center; gap: 0; margin-top: 18px; color: #758b86; font: 9px "Poppins"; }
+.hero-support span { display: inline-flex; align-items: center; gap: 5px; padding: 0 12px; border-right: 1px solid #26343e; white-space: nowrap; }
 .hero-support span svg { width: 13px; height: 13px; color: var(--mint); stroke-width: 2.4; }
 .hero-support span:first-child { padding-left: 0; }
 .hero-support span:last-child { border-right: 0; }
+
+@media (max-width: 1180px) {
+  .hero-support { width: 100%; display: grid; grid-template-columns: max-content max-content; row-gap: 7px; }
+  .hero-support span:nth-child(2) { border-right: 0; }
+  .hero-support span:last-child { grid-column: 1 / -1; padding-left: 0; }
+}
 
 .hero-product { position: relative; min-width: 0; padding: 26px 0 14px; contain: layout paint; }
 .hero-product-glow { position: absolute; inset: 12% 3% 2%; border-radius: 30%; background: radial-gradient(circle, #1c655733, transparent 66%); }
@@ -364,6 +377,7 @@ body[data-app-route="landing"] .app-shell {
 .landing-light .landing-brand { color: #152630; }
 .landing-light .landing-nav-links a { color: #5e727e; }
 .landing-light .landing-nav-links a:hover { color: #172a34; }
+.landing-light .landing-nav-actions { border-left-color: #d7e1e6; }
 .landing-light .landing-nav-links .landing-dashboard-link { border-color: #b8d8d1; background: #edf8f5; color: #316a5e; }
 .landing-light .landing-nav-links .landing-dashboard-link:hover, .landing-light .landing-nav-links .landing-dashboard-link:focus-visible { border-color: #7fb8aa; background: #e2f3ee; color: #174f44; }
 .landing-light .landing-nav-links .landing-theme-toggle { border-color: #cedbe1; background: #f4f7f9; color: #435b67; }
@@ -513,7 +527,9 @@ body[data-app-route="landing"] .app-shell {
 }
 
 @media (max-width: 900px) {
-  .landing-nav-links a { display: none; }
+  .landing-nav-sections a { display: none; }
+  .landing-nav-sections { display: none; }
+  .landing-nav-actions { padding-left: 0; border-left: 0; }
   .landing-hero { grid-template-columns: 1fr; padding-top: 75px; }
   .hero-product { margin-top: 10px; }
   .hero-shot { transform: none; }

@@ -108,7 +108,7 @@ worker/            Cloudflare worker entry point
 - Imported application code is never executed.
 - Project dependencies are not installed.
 - Workspace projects are stored locally in IndexedDB and separated by authenticated user ID.
-- Public GitHub imports fetch repository contents for static analysis.
+- Public GitHub imports fetch repository contents for static analysis without connecting a GitHub account.
 
 Review the hosting and authentication configuration before deploying the application publicly.
 
@@ -116,8 +116,8 @@ Review the hosting and authentication configuration before deploying the applica
 
 - The analysis workspace is intentionally restricted to desktop screens.
 - React and Next.js have the strongest support today.
-- SolidJS, LightningJS, and other framework adapters are planned but not implemented yet.
-- GitHub import supports public repositories; private repository OAuth is not implemented.
+- React, Next.js, SolidJS, SolidStart, and LightningJS support continue to evolve at different depths.
+- Private GitHub repository import is intentionally deferred; current imports support public repositories only.
 - Authentication currently depends on the hosting environment's identity headers, with a local development fallback.
 - Very large repositories are constrained by source-file and byte budgets to keep browser analysis responsive.
 
@@ -126,7 +126,7 @@ Review the hosting and authentication configuration before deploying the applica
 - Framework adapters for SolidJS, LightningJS, and additional React meta-frameworks
 - Richer prop, callback, state, route, and API data-flow edges
 - Detailed diagnostic explanations and suggested fixes
-- Google/GitHub OAuth and server-backed user sessions
+- Optional private-repository integration with fine-grained GitHub App permissions
 - Cloud project persistence and collaboration
 - Large-project performance benchmarks and broader end-to-end test coverage
 

@@ -225,7 +225,10 @@ export function analyzeTypeScriptSemantics(sources: Record<string, string>, comp
   const program = ts.createProgram({ rootNames: sourcePaths.map(toVirtualPath), options, host });
   const checker = program.getTypeChecker();
   try {
-    program.getSemanticDiagnostics().filter(isUsefulDiagnostic).forEach((diagnostic) => {
+    program.getSemanticDiagnostics().filter((diagnostic) => {
+      const fileName = diagnostic.file?.fileName ?? "";
+      return /\.tsx?$/i.test(fileName) && isUsefulDiagnostic(diagnostic);
+    }).forEach((diagnostic) => {
       const location = diagnostic.file!.getLineAndCharacterOfPosition(diagnostic.start!);
       issues.push({
         title: diagnosticTitle(diagnostic.code),

@@ -75,12 +75,20 @@ function lintTitle(ruleId: string | null, severity: number) {
   return severity === 2 ? "ESLint correctness error" : "ESLint code-quality warning";
 }
 
+const lintCache = new Map<string, { source: string; issues: AnalyzerIssue[] }>();
+
 export function analyzeESLint(sources: Record<string, string>): AnalyzerIssue[] {
   const linter = new Linter();
   const issues: AnalyzerIssue[] = [];
 
   Object.entries(sources).forEach(([file, source]) => {
     if (!JAVASCRIPT_FILE_PATTERN.test(file) || /\.d\.ts$/i.test(file) || TOOL_CONFIG_PATTERN.test(file)) return;
+    const cached = lintCache.get(file);
+    if (cached?.source === source) {
+      issues.push(...cached.issues);
+      return;
+    }
+    const fileIssues: AnalyzerIssue[] = [];
     try {
       const messages = linter.verify(source, [{
         files: ["**/*.{js,jsx}"],
@@ -94,7 +102,7 @@ export function analyzeESLint(sources: Record<string, string>): AnalyzerIssue[] 
       }], { filename: file });
 
       messages.slice(0, 12).forEach((message) => {
-        issues.push({
+        fileIssues.push({
           title: lintTitle(message.ruleId, message.severity),
           file,
           line: message.line || 1,
@@ -106,7 +114,7 @@ export function analyzeESLint(sources: Record<string, string>): AnalyzerIssue[] 
         });
       });
     } catch (error) {
-      issues.push({
+      fileIssues.push({
         title: "ESLint analysis skipped for file",
         file,
         line: 1,
@@ -115,6 +123,8 @@ export function analyzeESLint(sources: Record<string, string>): AnalyzerIssue[] 
         severity: "warning",
       });
     }
+    lintCache.set(file, { source, issues: fileIssues });
+    issues.push(...fileIssues);
   });
 
   return issues;

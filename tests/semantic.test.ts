@@ -66,6 +66,13 @@ test("reports common TypeScript assignment errors with line numbers", async () =
   assert.equal(issue?.line, 2);
 });
 
+test("does not report incomplete TypeScript library diagnostics for plain JavaScript", async () => {
+  const result = await analyzeProjectSources({
+    "src/App.js": `export const filtered = [{ id: 1 }].filter((item) => item.id).includes(true); localStorage.setItem("ready", "1");`,
+  });
+  assert.equal(result.issues.some((issue) => issue.source === "typescript" && issue.file === "src/App.js"), false);
+});
+
 test("reports real analyzer stages in order", async () => {
   const stages: number[] = [];
   await analyzeProjectSources({
@@ -73,4 +80,16 @@ test("reports real analyzer stages in order", async () => {
   }, (progress) => stages.push(progress.stage));
 
   assert.deepEqual(stages, [1, 2, 3, 4]);
+});
+
+test("reuses unchanged file AST facts on subsequent analysis", async () => {
+  const sources = {
+    "src/App.tsx": `import { Header } from "./Header"; export function App() { return <Header />; }`,
+    "src/Header.tsx": `export function Header() { return <header>Atlas</header>; }`,
+  };
+  await analyzeProjectSources(sources);
+  const progress: Array<{ cachedFiles?: number; totalFiles?: number }> = [];
+  await analyzeProjectSources(sources, (update) => progress.push(update));
+  assert.equal(progress[0]?.cachedFiles, 2);
+  assert.equal(progress[0]?.totalFiles, 2);
 });

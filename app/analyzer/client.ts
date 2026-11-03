@@ -60,7 +60,15 @@ export async function analyzeProjectSources(sources: Record<string, string>, onP
         reject(error instanceof Error ? error : new Error("The source analyzer could not start"));
       }
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message === "Analysis cancelled") throw error;
     return (await import("./index")).analyzeProjectSources(sources, onProgress);
   }
+}
+
+/** Cancel every active analysis and start with a fresh worker on the next request. */
+export function cancelActiveAnalyses() {
+  rejectPendingAnalyses("Analysis cancelled");
+  analyzerWorker?.terminate();
+  analyzerWorker = null;
 }

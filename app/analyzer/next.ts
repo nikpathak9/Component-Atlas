@@ -74,6 +74,10 @@ function dataNotes(source: string) {
   if (/\bgetStaticPaths\b/.test(source)) notes.push("It declares dynamic build paths with getStaticPaths.");
   if (/\bgenerateStaticParams\b/.test(source)) notes.push("It pre-generates dynamic App Router parameters.");
   if (/\bgenerateMetadata\b|\bmetadata\s*=/.test(source)) notes.push("It defines route-specific Next.js metadata.");
+  if (/\brevalidate\s*=/.test(source)) notes.push("It configures incremental route revalidation.");
+  if (/\bdynamic\s*=/.test(source)) notes.push("It explicitly configures static or dynamic rendering behavior.");
+  if (/\bruntime\s*=\s*["']edge["']/.test(source)) notes.push("It runs in the Next.js Edge runtime.");
+  if (/\b(?:cookies|headers)\s*\(/.test(source)) notes.push("It reads request-scoped server data.");
   return notes;
 }
 
@@ -89,6 +93,7 @@ function appFileInfo(file: string, source: string): NextFileInfo | null {
     loading: { role: "Route loading UI", kind: "Component" },
     error: { role: "Route error boundary", kind: "Component" },
     "not-found": { role: "Not-found UI", kind: "Component" },
+    "global-error": { role: "Global error boundary", kind: "Component" },
     default: { role: "Parallel-route fallback", kind: "Component" },
     route: { role: "Route handler", kind: "Service" },
   };
@@ -141,6 +146,20 @@ export function analyzeNextProject(sources: Record<string, string>): NextAnalysi
       rendering: "Edge/Server Module",
       notes: ["Next.js runs this middleware before matching application routes.", "It can redirect, rewrite, or modify requests and responses."],
     };
+    if (/(^|\/)(proxy|instrumentation)\.[jt]s$/i.test(file)) files[file] = {
+      kind: "Service",
+      role: /proxy\.[jt]s$/i.test(file) ? "Next.js proxy" : "Next.js instrumentation",
+      route: /proxy\.[jt]s$/i.test(file) ? "Request pipeline" : "Server lifecycle",
+      rendering: "Server Module",
+      notes: [/proxy\.[jt]s$/i.test(file) ? "Next.js runs this proxy before matching application routes." : "Next.js loads this instrumentation module during server startup."],
+    };
+    if (!files[file] && /^\s*["']use server["'];?/m.test(sources[file])) files[file] = {
+      kind: "Service",
+      role: "Next.js server actions",
+      route: "Server action boundary",
+      rendering: "Server Action Module",
+      notes: ["The use server directive exposes exported functions as Next.js server actions."],
+    };
   });
 
   const edges: AnalyzerEdge[] = [];
@@ -153,10 +172,10 @@ export function analyzeNextProject(sources: Record<string, string>): NextAnalysi
     const location = appLocation(file);
     if (!location || location.base === "route") return;
     const layout = nearestLayout(file, layouts);
-    if (layout && !edges.some((edge) => edge.from === layout && edge.to === file)) edges.push({ from: layout, to: file, dashed: true });
+    if (layout && !edges.some((edge) => edge.from === layout && edge.to === file)) edges.push({ from: layout, to: file, dashed: true, kind: "route", label: "Route layout" });
   });
   const appShell = Object.keys(files).find((file) => /(^|\/)pages\/_app\.[jt]sx?$/i.test(file));
-  if (appShell) Object.keys(files).filter((file) => files[file].role === "Pages Router page" && file !== appShell).forEach((file) => edges.push({ from: appShell, to: file, dashed: true }));
+  if (appShell) Object.keys(files).filter((file) => files[file].role === "Pages Router page" && file !== appShell).forEach((file) => edges.push({ from: appShell, to: file, dashed: true, kind: "route", label: "Router shell" }));
 
   return {
     detected,
