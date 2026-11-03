@@ -7,7 +7,7 @@ export default defineConfig({
     react(),
     sitemap({
       // Replace with your live Netlify or custom domain URL
-      hostname: "https://netlify.app",
+      hostname: "https://componentatlascodeflow.netlify.app/",
       // Optional: Add any specific routes you want to prioritize or exclude
       readable: true,
     }),
