@@ -54,6 +54,7 @@
     "typescript-eslint": "8.59.3",
     "vinext": "1.0.0-beta.2",
     "vite": "8.0.13",
+    "vite-plugin-sitemap": "^0.8.2",
     "wrangler": "4.92.0"
   },
   "type": "module"
