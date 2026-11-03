@@ -1,100 +1,135 @@
-# vinext-starter
+# Component Atlas
 
-A clean full-stack starter running on
-[vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
-Drizzle support.
+<p align="center">
+  <img src="public/component-atlas-logo.png" alt="Component Atlas logo" width="96" />
+</p>
 
-## Prerequisites
+<p align="center">
+  A browser-based static analysis workspace for understanding React and TypeScript codebases without running them.
+</p>
+
+Component Atlas turns source code into an interactive component graph, execution flow, relationship inspector, and connected source viewer. Import a local project, paste source code, or load a public GitHub repository to explore how files, components, hooks, state, effects, routes, APIs, and resources connect.
+
+## Highlights
+
+- Interactive component graph with draggable infinite canvas, zoom, minimap, filters, and focused relationships
+- Project explorer for source files, components, routes, hooks, styles, data, and assets
+- Resizable and collapsible project explorer, code viewer, and flow inspector
+- Multiple projects stored per signed-in user in browser IndexedDB
+- Unlimited, closable, horizontally scrollable source tabs
+- Syntax-highlighted source with AST-backed line-range navigation
+- Flow Inspector with metrics, analysis summaries, relationships, resources, and clickable execution steps
+- Local folder upload, pasted source, and public GitHub repository import
+- Duplicate-project and duplicate-file handling
+- Ignored-file report with reasons and configurable analysis budgets
+- Dark and light themes
+- Desktop-only analysis workspace with a responsive landing and authentication flow
+
+## Static analysis engine
+
+Analysis runs in a browser Web Worker and does not execute the imported application or install its dependencies.
+
+The analyzer currently combines:
+
+- `@babel/parser`, `@babel/traverse`, and `@babel/types` for JavaScript, JSX, TypeScript, and TSX AST analysis
+- TypeScript compiler APIs for semantic diagnostics, props, exports, symbol references, and path aliases
+- `eslint-linter-browserify` for browser-side correctness checks
+- Bundler configuration inspection for Vite and Webpack aliases, lazy imports, and assets
+- Next.js adapters for App Router, Pages Router, layouts, route handlers, API routes, and data-loading conventions
+
+## Supported project inputs
+
+Component Atlas currently focuses on React-oriented JavaScript and TypeScript projects.
+
+Kept for analysis or relationship mapping:
+
+- `.js`, `.jsx`, `.ts`, `.tsx`
+- `.css`, `.scss`, `.sass`, `.less`, `.styl`, `.stylus`
+- `.svg`, common image formats, and common font formats
+- `.json`, `.graphql`, `.gql`, `.mdx`
+
+Generated output, dependency directories, secrets, lock files, large binaries, and unrelated configuration files are ignored. The import report explains every ignored category.
+
+## Requirements
 
 - Node.js `>=22.13.0`
+- npm
+- A modern desktop browser with Web Worker, IndexedDB, File System upload, and ES module support
 
-## Quick Start
+Node.js 20 is not supported by the current vinext toolchain because it relies on newer Node filesystem APIs.
+
+## Local development
 
 ```bash
+git clone https://github.com/nikpathak9/Component-Atlas.git
+cd Component-Atlas
 npm install
 npm run dev
-npm run build
 ```
 
-This starter does not use `wrangler.jsonc`.
+Open [http://localhost:3000](http://localhost:3000).
 
-## Included Shape
+To select a compatible Node version with `nvm`:
 
-- edit site code under `app/`
-- `.openai/hosting.json` declares optional Sites D1 and R2 bindings
-- `vite.config.ts` simulates declared bindings for local development
-- `db/schema.ts` starts intentionally empty
-- `examples/d1/` contains an optional D1 example surface
-- `drizzle.config.ts` supports local migration generation when needed
-
-## Workspace Auth Headers
-
-Signed-in visitors receive both `oai-authenticated-user-id` and `oai-authenticated-user-email`. Private Sites require every visitor to sign in; public Sites may also have anonymous visitors, for whom neither header is present.
-
-The user ID is stable for the same user on the same Site and different across Sites. Email and name are intended for display or contact purposes.
-
-SIWC-authenticated workspace sites may also receive
-`oai-authenticated-user-full-name` when the user's SIWC profile has a non-empty
-`name` claim. The full-name value is percent-encoded UTF-8 and is accompanied by
-`oai-authenticated-user-full-name-encoding: percent-encoded-utf-8`.
-
-Treat the full name as optional and fall back to email when it is absent:
-
-```tsx
-import { headers } from "next/headers";
-
-export default async function Home() {
-  const requestHeaders = await headers();
-  const userId = requestHeaders.get("oai-authenticated-user-id");
-  const email = requestHeaders.get("oai-authenticated-user-email");
-  const encodedFullName = requestHeaders.get("oai-authenticated-user-full-name");
-  const fullName =
-    encodedFullName &&
-    requestHeaders.get("oai-authenticated-user-full-name-encoding") ===
-      "percent-encoded-utf-8"
-      ? decodeURIComponent(encodedFullName)
-      : null;
-
-  const displayName = fullName ?? email;
-  // ...
-}
+```bash
+nvm install 22
+nvm use 22
 ```
 
-## Optional Dispatch-Owned ChatGPT Sign-In
+## Commands
 
-Import the ready-to-use helpers from `app/chatgpt-auth.ts` when the site needs
-optional or required ChatGPT sign-in:
+```bash
+npm run dev            # Start the vinext development server
+npm run build          # Create a production build
+npm run start          # Start the production server
+npm run test:analyzer  # Run analyzer regression tests
+npm run lint           # Run ESLint
+```
 
-- Use `getChatGPTUser()` for optional signed-in UI.
-- Use `requireChatGPTUser(returnTo)` for server-rendered pages that should send
-  anonymous visitors through Sign in with ChatGPT.
-- Use `chatGPTSignInPath(returnTo)` and `chatGPTSignOutPath(returnTo)` for
-  browser links or actions.
-- Pass a same-origin relative `returnTo` path for the destination after sign-in
-  or sign-out. The helper validates and safely encodes it.
-- Mark protected pages with `export const dynamic = "force-dynamic"` because
-  they depend on per-request identity headers.
+## Project structure
 
-Dispatch owns `/signin-with-chatgpt`, `/signout-with-chatgpt`, `/callback`, the
-OAuth cookies, and identity header injection. Do not implement app routes for
-those reserved paths. Routes that do not import and call the helper remain
-anonymous-compatible.
+```text
+app/
+  analyzer/        Browser worker, AST, TypeScript, ESLint, bundler, and Next.js analysis
+  api/auth/        Current-user endpoint
+  login/           Sign-in screen
+  workspace/       Workspace route
+  page.tsx         Landing page, import workflow, and interactive workspace
+  *.css            Landing and workspace styling
+db/                Optional Drizzle/D1 data layer
+public/            Component Atlas branding assets
+tests/             Analyzer, semantic, ESLint, bundler, and Next.js tests
+worker/            Cloudflare worker entry point
+```
 
-SIWC establishes identity only; it does not prove workspace membership. Use the
-Sites hosting platform's access policy controls for workspace-wide restrictions,
-or enforce explicit server-side membership or allowlist checks.
+## Privacy model
 
-Use SIWC for account pages, user-specific dashboards, saved records, and write
-actions tied to the current ChatGPT user. Leave public content anonymous.
+- Imported local source is analyzed in the browser.
+- Imported application code is never executed.
+- Project dependencies are not installed.
+- Workspace projects are stored locally in IndexedDB and separated by authenticated user ID.
+- Public GitHub imports fetch repository contents for static analysis.
 
-## Useful Commands
+Review the hosting and authentication configuration before deploying the application publicly.
 
-- `npm run dev`: start local development
-- `npm run build`: verify the vinext build output
-- `npm test`: build the starter and verify its rendered loading skeleton
-- `npm run db:generate`: generate Drizzle migrations after schema changes
+## Current limitations
 
-## Learn More
+- The analysis workspace is intentionally restricted to desktop screens.
+- React and Next.js have the strongest support today.
+- SolidJS, LightningJS, and other framework adapters are planned but not implemented yet.
+- GitHub import supports public repositories; private repository OAuth is not implemented.
+- Authentication currently depends on the hosting environment's identity headers, with a local development fallback.
+- Very large repositories are constrained by source-file and byte budgets to keep browser analysis responsive.
 
-- [vinext Documentation](https://github.com/cloudflare/vinext)
-- [Drizzle D1 Guide](https://orm.drizzle.team/docs/get-started/d1-new)
+## Roadmap
+
+- Framework adapters for SolidJS, LightningJS, and additional React meta-frameworks
+- Richer prop, callback, state, route, and API data-flow edges
+- Detailed diagnostic explanations and suggested fixes
+- Google/GitHub OAuth and server-backed user sessions
+- Cloud project persistence and collaboration
+- Large-project performance benchmarks and broader end-to-end test coverage
+
+## Status
+
+Component Atlas is under active development. The analyzer regression suite currently covers component relationships, source locations, aliases, resources, ESLint findings, TypeScript semantics, bundler behavior, and Next.js conventions.
