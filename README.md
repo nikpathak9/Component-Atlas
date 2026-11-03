@@ -1,87 +1,136 @@
 # Component Atlas
 
 <p align="center">
-  <img src="public/component-atlas-logo.png" alt="Component Atlas logo" width="96" />
+  <img src="public/component-atlas-logo.png" alt="Component Atlas logo" width="104" />
 </p>
 
-<p align="center">
-  A browser-based static analysis workspace for understanding React and TypeScript codebases without running them.
-</p>
+<p align="center"><strong>Understand a codebase before you touch a line.</strong></p>
 
-Component Atlas turns source code into an interactive component graph, execution flow, relationship inspector, and connected source viewer. Import a local project, paste source code, or load a public GitHub repository to explore how files, components, hooks, state, effects, routes, APIs, and resources connect.
+Component Atlas is a browser-based static analysis workspace that turns a frontend project into an interactive map of its components, routes, dependencies, data flow, diagnostics, and source code.
 
-## Highlights
+## What it does
 
-- Interactive component graph with draggable infinite canvas, zoom, minimap, filters, and focused relationships
-- Project explorer for source files, components, routes, hooks, styles, data, and assets
-- Resizable and collapsible project explorer, code viewer, and flow inspector
-- Multiple projects stored per signed-in user in browser IndexedDB
-- Unlimited, closable, horizontally scrollable source tabs
-- Syntax-highlighted source with AST-backed line-range navigation
-- Flow Inspector with metrics, analysis summaries, relationships, resources, and clickable execution steps
-- Local folder upload, pasted source, and public GitHub repository import
-- Duplicate-project and duplicate-file handling
-- Ignored-file report with reasons and configurable analysis budgets
-- Dark and light themes
-- Desktop-only analysis workspace with a responsive landing and authentication flow
+Import a local folder, paste source code, or provide a public GitHub repository URL. Component Atlas analyzes the project without running it or installing its dependencies, then provides:
 
-## Static analysis engine
+- An interactive component and dependency graph
+- Focused incoming and outgoing relationships for the selected file
+- Execution-flow explanations linked to exact source ranges
+- A directory-style explorer for source, styles, data, and assets
+- A syntax-highlighted viewer with unlimited, closable tabs
+- TypeScript, ESLint, parser, and unresolved-import diagnostics
+- Project health, comparison, ignored-file, and storage reports
+- Multiple saved projects with rename, reanalysis, favorites, and deletion
+- Dark and light themes with a desktop-focused, resizable workspace
 
-Analysis runs in a browser Web Worker and does not execute the imported application or install its dependencies.
+## Analysis engine
 
-The analyzer currently combines:
+Analysis runs inside a browser Web Worker. Imported application code is not executed.
 
-- `@babel/parser`, `@babel/traverse`, and `@babel/types` for JavaScript, JSX, TypeScript, and TSX AST analysis
-- TypeScript compiler APIs for semantic diagnostics, props, exports, symbol references, and path aliases
-- `eslint-linter-browserify` for browser-side correctness checks
-- Bundler configuration inspection for Vite and Webpack aliases, lazy imports, and assets
-- Next.js adapters for App Router, Pages Router, layouts, route handlers, API routes, and data-loading conventions
+| Engine | Purpose |
+| --- | --- |
+| Babel parser and traversal | JavaScript, JSX, TypeScript, and TSX syntax trees |
+| TypeScript compiler APIs | Symbols, props, exports, aliases, references, and semantic diagnostics |
+| ESLint browser runtime | Static correctness checks for JavaScript source |
+| Framework adapters | Routes, layouts, lifecycle APIs, and framework relationships |
+| Bundler inspection | Vite and Webpack aliases, lazy imports, and assets |
 
-## Supported project inputs
+Unchanged file facts are cached between analyses to reduce repeat work.
 
-Component Atlas currently focuses on React-oriented JavaScript and TypeScript projects.
+## Framework support
 
-Kept for analysis or relationship mapping:
+- React
+- Next.js App Router and Pages Router
+- Remix
+- SolidJS and SolidStart
+- LightningJS
+- Vue and Nuxt
+- Astro
 
-- `.js`, `.jsx`, `.ts`, `.tsx`
-- `.css`, `.scss`, `.sass`, `.less`, `.styl`, `.stylus`
-- `.svg`, common image formats, and common font formats
-- `.json`, `.graphql`, `.gql`, `.mdx`
+React and Next.js currently have the deepest support. Other adapters continue to evolve.
 
-Generated output, dependency directories, secrets, lock files, large binaries, and unrelated configuration files are ignored. The import report explains every ignored category.
+## Supported inputs
+
+- Local project folders
+- Pasted JavaScript or TypeScript source
+- Public GitHub repositories
+
+Private GitHub repositories are not supported yet.
+
+Relevant source, style, data, vector, image, and font files are kept for analysis or relationship mapping. Generated output, dependency folders, secrets, lock files, oversized binaries, and unsupported files are excluded. The import report explains what was ignored and why.
+
+## Privacy
+
+- Local analysis happens in the browser.
+- Imported applications are never executed.
+- Project dependencies are never installed.
+- Local and pasted private source is not uploaded to Firestore.
+- Firestore stores cloud-safe analysis metadata so signed-in users can restore projects across sessions.
+- Public GitHub source is fetched only for the repository being analyzed.
+
+Review the Firebase and hosting configuration before deploying publicly.
 
 ## Requirements
 
-- Node.js `>=22.13.0`
+- Node.js `22.13.0` or newer
 - npm
-- A modern desktop browser with Web Worker, IndexedDB, File System upload, and ES module support
+- A modern desktop browser with Web Worker and ES module support
 
-Node.js 20 is not supported by the current vinext toolchain because it relies on newer Node filesystem APIs.
+The current vinext toolchain does not run on Node.js 20 because it requires newer Node filesystem APIs.
 
-## Local development
+## Getting started
 
 ```bash
 git clone https://github.com/nikpathak9/Component-Atlas.git
 cd Component-Atlas
 npm install
+cp .env.example .env.local
+```
+
+Add your Firebase web configuration to `.env.local`:
+
+```env
+VITE_FIREBASE_API_KEY=
+VITE_FIREBASE_AUTH_DOMAIN=
+VITE_FIREBASE_PROJECT_ID=
+VITE_FIREBASE_STORAGE_BUCKET=
+VITE_FIREBASE_MESSAGING_SENDER_ID=
+VITE_FIREBASE_APP_ID=
+```
+
+Start the application:
+
+```bash
 npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000).
 
-To select a compatible Node version with `nvm`:
+With `nvm`:
 
 ```bash
 nvm install 22
 nvm use 22
 ```
 
+## Firebase setup
+
+1. Create a Firebase project and web application.
+2. Enable Google and Email/Password providers in Firebase Authentication.
+3. Create a Firestore database.
+4. Add the Firebase web configuration to `.env.local`.
+5. Review and deploy the included Firestore rules before production use.
+
+```bash
+firebase deploy --only firestore:rules
+```
+
 ## Commands
 
 ```bash
-npm run dev            # Start the vinext development server
+npm run dev            # Start the development server
 npm run build          # Create a production build
 npm run start          # Start the production server
+npm run test           # Build and run rendered HTML tests
 npm run test:analyzer  # Run analyzer regression tests
 npm run lint           # Run ESLint
 ```
@@ -90,46 +139,43 @@ npm run lint           # Run ESLint
 
 ```text
 app/
-  analyzer/        Browser worker, AST, TypeScript, ESLint, bundler, and Next.js analysis
-  api/auth/        Current-user endpoint
-  login/           Sign-in screen
-  workspace/       Workspace route
-  page.tsx         Landing page, import workflow, and interactive workspace
-  *.css            Landing and workspace styling
-db/                Optional Drizzle/D1 data layer
-public/            Component Atlas branding assets
-tests/             Analyzer, semantic, ESLint, bundler, and Next.js tests
-worker/            Cloudflare worker entry point
+  analyzer/             Web Worker and static-analysis engines
+  components/           Code viewer and workspace components
+  firebase/             Authentication and Firestore project sync
+  lib/                  Shared file and presentation utilities
+  login/                Sign-in route
+  signup/               Account creation route
+  stores/               Zustand UI and editor state
+  types/                Shared workspace types
+  workspace/            Workspace route
+  page.tsx              Main application orchestration
+db/                     Optional Drizzle data layer
+public/                 Logos and static assets
+tests/                  Analyzer and framework regression tests
+worker/                 Cloudflare-compatible worker entry
 ```
-
-## Privacy model
-
-- Imported local source is analyzed in the browser.
-- Imported application code is never executed.
-- Project dependencies are not installed.
-- Workspace projects are stored locally in IndexedDB and separated by authenticated user ID.
-- Public GitHub imports fetch repository contents for static analysis without connecting a GitHub account.
-
-Review the hosting and authentication configuration before deploying the application publicly.
 
 ## Current limitations
 
-- The analysis workspace is intentionally restricted to desktop screens.
-- React and Next.js have the strongest support today.
-- React, Next.js, SolidJS, SolidStart, and LightningJS support continue to evolve at different depths.
-- Private GitHub repository import is intentionally deferred; current imports support public repositories only.
-- Authentication currently depends on the hosting environment's identity headers, with a local development fallback.
-- Very large repositories are constrained by source-file and byte budgets to keep browser analysis responsive.
+- The analysis workspace is restricted to desktop screens.
+- Private GitHub repository import is unavailable.
+- Cloud sync has a payload limit and stores analysis metadata rather than private local source.
+- Large repositories use file and byte budgets to protect browser responsiveness.
+- Some framework adapters provide less detail than React and Next.js.
 
 ## Roadmap
 
-- Framework adapters for SolidJS, LightningJS, and additional React meta-frameworks
-- Richer prop, callback, state, route, and API data-flow edges
-- Detailed diagnostic explanations and suggested fixes
-- Optional private-repository integration with fine-grained GitHub App permissions
-- Cloud project persistence and collaboration
-- Large-project performance benchmarks and broader end-to-end test coverage
+- Deeper state, callback, prop, route, and API-flow analysis
+- Private GitHub support using minimal OAuth permissions
+- Virtualized project trees and diagnostic lists
+- Graph layout work moved fully off the main UI thread
+- Further component extraction and performance profiling
+- Expanded end-to-end and accessibility coverage
 
-## Status
+## Development status
 
-Component Atlas is under active development. The analyzer regression suite currently covers component relationships, source locations, aliases, resources, ESLint findings, TypeScript semantics, bundler behavior, and Next.js conventions.
+Component Atlas is under active development. The analyzer regression suite covers AST relationships, aliases, resources, TypeScript semantics, ESLint findings, bundler behavior, framework routes, source locations, caching, and analysis progress.
+
+## License
+
+No open-source license has been added yet. All rights are reserved by the repository owner unless a license is introduced later.
