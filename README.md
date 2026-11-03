@@ -75,7 +75,7 @@ Review the Firebase and hosting configuration before deploying publicly.
 - npm
 - A modern desktop browser with Web Worker and ES module support
 
-The current vinext toolchain does not run on Node.js 20 because it requires newer Node filesystem APIs.
+Component Atlas uses Vite for local development and production builds.
 
 ## Getting started
 
@@ -124,6 +124,18 @@ nvm use 22
 firebase deploy --only firestore:rules
 ```
 
+## Deploying to Netlify
+
+This repository includes `netlify.toml`. In Netlify, import the GitHub repository and use the included build settings:
+
+- Build command: `npm run build`
+- Publish directory: `dist`
+- Node version: `22`
+
+In **Project configuration → Environment variables**, add the six `VITE_FIREBASE_*` values from your Firebase web application. Do not add a local `.env` file to the repository.
+
+For Google authentication, add your deployed Netlify domain to Firebase Authentication's **Authorized domains** list. Direct navigation to `/workspace`, `/login`, and `/signup` is supported by the SPA redirect in `netlify.toml`.
+
 ## Commands
 
 ```bash
@@ -152,7 +164,7 @@ app/
 db/                     Optional Drizzle data layer
 public/                 Logos and static assets
 tests/                  Analyzer and framework regression tests
-worker/                 Cloudflare-compatible worker entry
+netlify.toml            Netlify build settings and SPA route redirect
 ```
 
 ## Current limitations
