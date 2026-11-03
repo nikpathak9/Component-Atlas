@@ -41,3 +41,6 @@ yarn-error.log*
 /.pnpm-store/
 /_logs/
 /_update-notifier-last-checked
+
+# TypeScript incremental build cache
+*.tsbuildinfo
