@@ -151,8 +151,9 @@ body[data-app-route="landing"] .app-shell {
 }
 
 .hero-product { position: relative; min-width: 0; padding: 26px 0 14px; contain: layout paint; }
-.mobile-workspace-preview { display: none; width: 100%; border-radius: inherit; }
+.mobile-workspace-preview { display: block; width: 100%; border-radius: inherit; }
 .mobile-workspace-preview img { display: block; width: 100%; height: auto; border-radius: inherit; object-fit: contain; }
+.hero-product .mobile-workspace-preview { position: relative; z-index: 1; overflow: hidden; border: 1px solid #2a4050; border-radius: 12px; box-shadow: 0 22px 55px #0009, 0 0 0 4px #10202a80; }
 .hero-product-glow { position: absolute; inset: 12% 3% 2%; border-radius: 30%; background: radial-gradient(circle, #1c655733, transparent 66%); }
 .hero-shot { position: relative; z-index: 1; overflow: hidden; min-height: 438px; border: 1px solid #2a4050; border-radius: 12px; background: #071017; box-shadow: 0 22px 55px #0009, 0 0 0 4px #10202a80; contain: layout paint; }
 .hero-shot-top { height: 42px; display: flex; align-items: center; gap: 14px; padding: 0 12px; border-bottom: 1px solid #1d303d; background: #09121a; color: #687b89; font-size: 7px; }
@@ -256,6 +257,7 @@ body[data-app-route="landing"] .app-shell {
 .preview-switchers small { margin-top: 5px; color: #8a9ca8; font-size: 11px; line-height: 1.4; }
 
 .landing-product-frame { width: min(1240px, 100%); margin: 0 auto; overflow: hidden; border: 1px solid #2a4050; border-radius: 14px; background: #071017; box-shadow: 0 26px 68px #0007; contain: layout paint; touch-action: pan-y; }
+.landing-product-frame .mobile-workspace-preview { border-radius: 13px; }
 .landing-product-canvas { width: max(960px, 100%); transform-origin: left top; }
 .demo-topbar { min-width: 960px; height: 48px; display: flex; align-items: center; gap: 22px; padding: 0 15px; border-bottom: 1px solid #20303e; background: #09121a; color: #8798a6; font-size: 10px; }
 .demo-topbar > div { display: flex; gap: 6px; }
@@ -484,6 +486,7 @@ body[data-app-route="landing"] .app-shell {
 .landing-light .preview-switchers b { color: #213640; }
 .landing-light .preview-switchers small { color: #667c87; }
 .landing-light .landing-product-frame { border-color: #c8d8df; background: #ffffff; box-shadow: 0 26px 68px #2946541c; }
+.landing-light .hero-product .mobile-workspace-preview { border-color: #c8d8df; box-shadow: 0 22px 55px #29465420, 0 0 0 4px #dbe7eb80; }
 .landing-light .demo-topbar { border-bottom-color: #d7e2e7; background: #ffffff; color: #667b86; }
 .landing-light .demo-topbar strong { color: #1d3039; }
 .landing-light .demo-topbar small { color: #13705f; }

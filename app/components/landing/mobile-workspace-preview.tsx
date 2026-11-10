@@ -1,8 +1,5 @@
 import { memo } from "react";
 
-const transparentPixel =
-  "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
-
 type Props = {
   theme: "light" | "dark";
   alt: string;
@@ -16,14 +13,10 @@ export const MobileWorkspacePreview = memo(function MobileWorkspacePreview({
 }: Props) {
   return (
     <picture className='mobile-workspace-preview'>
-      <source
-        media='(max-width: 760px)'
-        srcSet={`/previews/workspace-${theme}.jpg`}
-      />
       <img
-        src={transparentPixel}
-        width='1200'
-        height='820'
+        src={`/previews/workspace-${theme}.jpg`}
+        width='1800'
+        height='1130'
         alt={alt}
         loading={eager ? "eager" : "lazy"}
         decoding={eager ? "sync" : "async"}
