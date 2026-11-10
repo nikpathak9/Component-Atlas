@@ -25,7 +25,7 @@
   <a href="#-deployment">Deployment</a>
 </p>
 
-![Component Atlas dark workspace](./public/previews/workspace-dark.jpg)
+![Component Atlas dark workspace](./public/previews/workspace-dark.png)
 
 ## Why Component Atlas?
 
@@ -83,7 +83,7 @@ Component Atlas makes those relationships visible. Select a file to see what it 
 
 | Dark theme | Light theme |
 | --- | --- |
-| <img src="./public/previews/workspace-dark.jpg" alt="Component Atlas dark theme" width="100%" /> | <img src="./public/previews/workspace-light.jpg" alt="Component Atlas light theme" width="100%" /> |
+| <img src="./public/previews/workspace-dark.png" alt="Component Atlas dark theme" width="100%" /> | <img src="./public/previews/workspace-light.png" alt="Component Atlas light theme" width="100%" /> |
 
 Both themes preserve graph categories, diagnostics, code highlighting, and inspector hierarchy. The analysis workspace is currently optimized for desktop screens.
 
