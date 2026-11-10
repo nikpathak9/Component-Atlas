@@ -2,8 +2,8 @@
 
 import { useEffect, useLayoutEffect, useState, type FormEvent } from "react";
 import ArrowRight from "lucide-react/icons/arrow-right";
-import LogIn from "lucide-react/icons/log-in";
 import ShieldCheck from "lucide-react/icons/shield-check";
+import { AuthLayout, GoogleAuthButton, PasswordField } from "../components/auth/auth-ui";
 import { observeAuthState, sendResetEmail, signInWithEmail, signInWithGoogle, signOutFromFirebase } from "../firebase/auth";
 
 function safeReturnPath(value: string | null) {
@@ -85,27 +85,25 @@ export default function LoginPage() {
   if (!ready) return <main className={`login-page login-loading ${theme === "light" ? "light-theme" : ""}`}><img src="/component-atlas-logo.png" alt="" /><p>Preparing sign in…</p></main>;
 
   return (
-    <main className={`login-page ${theme === "light" ? "light-theme" : ""}`}>
-      <a className="login-brand" href="/"><img src="/component-atlas-logo.png" alt="" /><strong>Component Atlas</strong></a>
-      <section className="login-panel">
-        <span className="login-icon"><LogIn aria-hidden="true" /></span>
-        <div className="analysis-kicker">WELCOME BACK</div>
-        <h1>Sign in to Component Atlas</h1>
-        <p>Sign in to return to your saved Component Atlas workspace.</p>
-        <button className="google-login-button" type="button" disabled={Boolean(signingIn)} onClick={handleGoogleSignIn}><LogIn aria-hidden="true" /><span>{signingIn === "google" ? "Opening Google…" : "Continue with Google"}</span><ArrowRight aria-hidden="true" /></button>
-        <div className="auth-divider"><span>or continue with email</span></div>
-        <form className="email-auth-form" onSubmit={handleEmailSignIn}>
-          <label><span>Email address</span><input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" /></label>
-          <label><span>Password</span><input type="password" autoComplete="current-password" required minLength={6} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Enter your password" /></label>
-          <button type="submit" disabled={Boolean(signingIn)}><span>{signingIn === "email" ? "Signing in…" : "Sign in with email"}</span><ArrowRight aria-hidden="true" /></button>
-        </form>
-        <button className="forgot-password" type="button" onClick={() => void handlePasswordReset()}>Forgot password?</button>
+    <AuthLayout mode='login' returnTo={returnTo} theme={theme}>
+      <div className='auth-card-header'>
+        <span>WELCOME BACK</span>
+        <h2>Sign in to your workspace</h2>
+        <p>Continue where you left off with your saved projects and analysis.</p>
+      </div>
+      <GoogleAuthButton busy={signingIn === "google"} onClick={handleGoogleSignIn} text='Continue with Google' />
+      <div className="auth-divider"><span>or use your email</span></div>
+      <form className="email-auth-form auth-form" onSubmit={handleEmailSignIn}>
+        <label className='auth-field'><span className='auth-field-label'><b>Email address</b></span><input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" /></label>
+        <PasswordField autoComplete='current-password' label='Password' value={password} onChange={(event) => setPassword(event.target.value)} placeholder='Enter your password' trailing={<button className="forgot-password" type="button" onClick={() => void handlePasswordReset()}>Forgot password?</button>} />
+        <button className='auth-submit' type="submit" disabled={Boolean(signingIn)}><span>{signingIn === "email" ? "Signing in…" : "Sign in"}</span><ArrowRight aria-hidden="true" /></button>
+      </form>
+      <div className='auth-feedback' aria-live='polite'>
         {error && <div className="login-auth-error" role="alert">{error}</div>}
         {message && <div className="login-auth-message" role="status">{message}</div>}
-        <p className="auth-switch">New to Component Atlas? <a href={`/signup?return_to=${encodeURIComponent(returnTo)}`}>Create an account</a></p>
-        <small><ShieldCheck aria-hidden="true" /> Authentication is handled securely by Firebase. Component Atlas never sees your Google password.</small>
-      </section>
-      <a className="login-back" href={returnTo}>← Back to Component Atlas</a>
-    </main>
+      </div>
+      <p className="auth-switch">New to Component Atlas? <a href={`/signup?return_to=${encodeURIComponent(returnTo)}`}>Create an account</a></p>
+      <small className='auth-security-note'><ShieldCheck aria-hidden="true" /> Authentication is handled securely by Firebase. Component Atlas never sees your Google password.</small>
+    </AuthLayout>
   );
 }

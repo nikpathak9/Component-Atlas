@@ -14,9 +14,12 @@ export type WorkspaceMenu =
   | "projectSearch"
   | "filter"
   | "fileView"
+  | "explorerActions"
+  | "explorerFilter"
   | "more"
   | "workspaceTools"
   | "codeActions"
+  | "codeTabs"
   | "account"
   | null;
 export type WorkspaceModal =
@@ -86,7 +89,7 @@ export const useWorkspaceUiStore = create<WorkspaceUiState>((set) => ({
   fileTab: "Files",
   inspectorTab: "Overview",
   showMinimap: true,
-  showGraphLegend: true,
+  showGraphLegend: false,
   showOnboarding: false,
   toast: "",
   setTheme: (update) => set((state) => ({ theme: resolveUpdate(state.theme, update) })),

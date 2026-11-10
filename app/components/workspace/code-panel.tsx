@@ -1,5 +1,6 @@
 /* eslint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */
-import { memo, useEffect, useRef, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import Check from "lucide-react/icons/check";
 import ChevronRight from "lucide-react/icons/chevron-right";
 import CloudOff from "lucide-react/icons/cloud-off";
 import Code2 from "lucide-react/icons/code-2";
@@ -7,6 +8,11 @@ import Copy from "lucide-react/icons/copy";
 import Ellipsis from "lucide-react/icons/ellipsis";
 import FileCode2 from "lucide-react/icons/file-code-2";
 import FolderOpen from "lucide-react/icons/folder-open";
+import List from "lucide-react/icons/list";
+import Minus from "lucide-react/icons/minus";
+import Plus from "lucide-react/icons/plus";
+import Search from "lucide-react/icons/search";
+import WrapText from "lucide-react/icons/wrap-text";
 import X from "lucide-react/icons/x";
 import { useShallow } from "zustand/react/shallow";
 import { HighlightedCode } from "../code/highlighted-code";
@@ -45,6 +51,12 @@ export const CodePanel = memo(function CodePanel({
 }: CodePanelProps) {
   const tabsRef = useRef<HTMLDivElement>(null);
   const previewRef = useRef<HTMLPreElement>(null);
+  const findInputRef = useRef<HTMLInputElement>(null);
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState("");
+  const [findMatchIndex, setFindMatchIndex] = useState(0);
+  const [wordWrap, setWordWrap] = useState(false);
+  const [codeFontSize, setCodeFontSize] = useState(13);
   const {
     activeFile,
     setActiveFile,
@@ -77,6 +89,20 @@ export const CodePanel = memo(function CodePanel({
   );
   const activeIsImage = Boolean(activeFile && IMAGE_FILE_PATTERN.test(activeFile));
   const activeIsBinaryAsset = Boolean(activeFile && BINARY_ASSET_PATTERN.test(activeFile));
+  const activeDetail = activeFile ? projectDetails[activeFile] : undefined;
+  const highlightedExplanation = highlightedLocation?.file === activeFile
+    ? activeDetail?.explanations?.find((item) => {
+      const endLine = item.endLine ?? item.line;
+      return highlightedLocation.line >= item.line && highlightedLocation.line <= endLine;
+    })
+    : undefined;
+  const searchMatches = useMemo(() => {
+    const query = findQuery.trim().toLocaleLowerCase();
+    if (!query || !activeSource) return [];
+    return activeSource.split("\n").flatMap((line, index) => line.toLocaleLowerCase().includes(query) ? [index + 1] : []);
+  }, [activeSource, findQuery]);
+  const activeSearchLine = searchMatches[findMatchIndex] ?? 0;
+  const sourceLineCount = activeSource ? activeSource.split("\n").length : 0;
 
   useEffect(() => {
     const activeTab = Array.from(
@@ -94,6 +120,38 @@ export const CodePanel = memo(function CodePanel({
     });
     return () => window.cancelAnimationFrame(frame);
   }, [activeFile, activeSource, highlightedLocation]);
+
+  useEffect(() => {
+    setFindMatchIndex(0);
+  }, [activeFile, findQuery]);
+
+  useEffect(() => {
+    if (!findOpen) return;
+    findInputRef.current?.focus();
+    findInputRef.current?.select();
+  }, [findOpen]);
+
+  useEffect(() => {
+    if (!activeSearchLine) return;
+    previewRef.current
+      ?.querySelector<HTMLElement>(`[data-line="${activeSearchLine}"]`)
+      ?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [activeSearchLine]);
+
+  useEffect(() => {
+    const handleFindShortcut = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLocaleLowerCase() !== "f" || !activeFile) return;
+      event.preventDefault();
+      setFindOpen(true);
+    };
+    window.addEventListener("keydown", handleFindShortcut);
+    return () => window.removeEventListener("keydown", handleFindShortcut);
+  }, [activeFile]);
+
+  const moveFindMatch = (direction: -1 | 1) => {
+    if (!searchMatches.length) return;
+    setFindMatchIndex((current) => (current + direction + searchMatches.length) % searchMatches.length);
+  };
 
   const closeFile = (file: string) => {
     const closingIndex = openFiles.indexOf(file);
@@ -155,21 +213,44 @@ export const CodePanel = memo(function CodePanel({
           })}
         </div>
         <button className='code-tabs-scroll' aria-label='Scroll tabs right' title='Scroll tabs right' onClick={() => tabsRef.current?.scrollBy({ left: 260, behavior: "smooth" })}><ChevronRight aria-hidden='true' /></button>
+        <div className='code-tabs-overflow'>
+          <button aria-label='Show all open files' title='Show all open files' aria-haspopup='menu' aria-expanded={menu === "codeTabs"} onClick={() => setMenu(menu === "codeTabs" ? null : "codeTabs")}><List aria-hidden='true' /></button>
+          {menu === "codeTabs" && <div className='popover code-tabs-menu' role='menu'><header><b>Open files</b><small>{openFiles.length}</small></header>{openFiles.map((file) => <button className={file === activeFile ? "active" : ""} role='menuitem' key={file} onClick={() => { void onOpenFile(file); setMenu(null); }}>{fileIcon(file)}<span><b>{file.split("/").at(-1)}</b><small>{file}</small></span>{(projectDetails[file]?.insights?.diagnostics?.length ?? 0) > 0 && <i>{projectDetails[file]?.insights?.diagnostics?.length}</i>}</button>)}</div>}
+        </div>
       </div>
       {activeFile && (
         <div className='code-source-bar'>
-          <div>
-            {fileIcon(activeFile)}<span title={activeFile}>{activeFile}</span>
+          <div className='code-breadcrumbs' title={activeFile}>
+            {fileIcon(activeFile)}<span>{activeFile.split("/").map((part, index, parts) => <span key={`${part}-${index}`}><b>{part}</b>{index < parts.length - 1 && <ChevronRight aria-hidden='true' />}</span>)}</span>
             {highlightedLocation?.file === activeFile && <em>{lineRangeLabel(highlightedLocation.line, highlightedLocation.endLine)}</em>}
-            {(projectDetails[activeFile]?.insights?.diagnostics?.length ?? 0) > 0 && <i>{projectDetails[activeFile]?.insights?.diagnostics?.length} issues</i>}
+            {(activeDetail?.insights?.diagnostics?.length ?? 0) > 0 && <i>{activeDetail?.insights?.diagnostics?.length} issues</i>}
           </div>
           <div className='code-source-actions'>
-            <button aria-label='Copy file path' title='Copy file path' onClick={() => { void navigator.clipboard?.writeText(activeFile); notify("File path copied"); }}><Copy aria-hidden='true' /><span>Path</span></button>
+            <button aria-label='Find in file' title='Find in file (Command or Control F)' onClick={() => setFindOpen(true)}><Search aria-hidden='true' /><span>Find</span></button>
             <button aria-label='More code actions' aria-expanded={menu === "codeActions"} title='More code actions' onClick={() => setMenu(menu === "codeActions" ? null : "codeActions")}><Ellipsis aria-hidden='true' /></button>
-            {menu === "codeActions" && <div className='popover code-actions-menu' role='menu'><button role='menuitem' onClick={() => { void navigator.clipboard?.writeText(activeSource); notify("Code copied"); setMenu(null); }}><Copy aria-hidden='true' /> Copy code</button><button role='menuitem' onClick={() => { setOpenFiles([activeFile]); setMenu(null); }}><X aria-hidden='true' /> Close other tabs</button></div>}
+            {menu === "codeActions" && <div className='popover code-actions-menu' role='menu'>
+              <header><b>Code actions</b><small>{sourceExtension(activeFile).toUpperCase()}</small></header>
+              <button role='menuitem' onClick={() => { void navigator.clipboard?.writeText(activeSource); notify("Code copied"); setMenu(null); }}><Copy aria-hidden='true' /> Copy source</button>
+              <button role='menuitem' onClick={() => { void navigator.clipboard?.writeText(activeFile); notify("File path copied"); setMenu(null); }}><FolderOpen aria-hidden='true' /> Copy file path</button>
+              <button className={wordWrap ? "selected" : ""} role='menuitemcheckbox' aria-checked={wordWrap} onClick={() => setWordWrap((current) => !current)}><WrapText aria-hidden='true' /> Word wrap {wordWrap && <Check aria-hidden='true' />}</button>
+              <div className='code-font-controls'><span>Code size</span><button aria-label='Decrease code font size' onClick={() => setCodeFontSize((current) => Math.max(11, current - 1))}><Minus aria-hidden='true' /></button><b>{codeFontSize}px</b><button aria-label='Increase code font size' onClick={() => setCodeFontSize((current) => Math.min(18, current + 1))}><Plus aria-hidden='true' /></button></div>
+              <button role='menuitem' onClick={() => { setOpenFiles([activeFile]); setMenu(null); }}><X aria-hidden='true' /> Close other tabs</button>
+              <button role='menuitem' onClick={() => { setOpenFiles([]); setActiveFile(""); setMenu(null); }}><X aria-hidden='true' /> Close all tabs</button>
+            </div>}
           </div>
         </div>
       )}
+      {activeFile && highlightedLocation?.file === activeFile && <div className='code-highlight-context'>
+        <span><b>Why these lines?</b><p>{highlightedExplanation?.text ?? "This source range is connected to the selected graph item or inspector step."}</p></span>
+        <em>{lineRangeLabel(highlightedLocation.line, highlightedLocation.endLine)}</em>
+      </div>}
+      {activeFile && findOpen && <div className='code-find-bar'>
+        <Search aria-hidden='true' /><input ref={findInputRef} value={findQuery} onChange={(event) => setFindQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") moveFindMatch(event.shiftKey ? -1 : 1); if (event.key === "Escape") setFindOpen(false); }} placeholder='Find in file…' />
+        <span>{findQuery ? `${searchMatches.length ? findMatchIndex + 1 : 0} of ${searchMatches.length}` : "0 results"}</span>
+        <button disabled={!searchMatches.length} aria-label='Previous match' onClick={() => moveFindMatch(-1)}><ChevronRight aria-hidden='true' /></button>
+        <button disabled={!searchMatches.length} aria-label='Next match' onClick={() => moveFindMatch(1)}><ChevronRight aria-hidden='true' /></button>
+        <button aria-label='Close find' onClick={() => setFindOpen(false)}><X aria-hidden='true' /></button>
+      </div>}
       {!activeFile ? (
         <div className='code-empty-state'><FileCode2 aria-hidden='true' /><b>No file open</b><p>Select a file in the Project Explorer to inspect its source.</p></div>
       ) : activeSourceMissing ? (
@@ -179,8 +260,9 @@ export const CodePanel = memo(function CodePanel({
       ) : activeIsBinaryAsset ? (
         <div className='asset-preview binary-asset-preview'>{fileIcon(activeFile)}<span><b>{activeFile.split("/").at(-1)}</b><small>{sourceExtension(activeFile).toUpperCase()} binary asset · Preview unavailable</small></span></div>
       ) : (
-        <pre ref={previewRef} data-file-category={fileCategory(activeFile)}><HighlightedCode source={activeSource} diagnostics={projectDetails[activeFile]?.insights?.diagnostics ?? []} highlightedLine={highlightedLocation?.file === activeFile ? highlightedLocation.line : 0} highlightedEndLine={highlightedLocation?.file === activeFile ? highlightedLocation.endLine : 0} /></pre>
+        <pre className={wordWrap ? "word-wrap" : ""} ref={previewRef} data-file-category={fileCategory(activeFile)} style={{ fontSize: `${codeFontSize}px` }}><HighlightedCode source={activeSource} diagnostics={projectDetails[activeFile]?.insights?.diagnostics ?? []} highlightedLine={highlightedLocation?.file === activeFile ? highlightedLocation.line : 0} highlightedEndLine={highlightedLocation?.file === activeFile ? highlightedLocation.endLine : 0} searchQuery={findOpen ? findQuery : ""} activeSearchLine={findOpen ? activeSearchLine : 0} /></pre>
       )}
+      {activeFile && <div className='code-status-bar'><span>{sourceExtension(activeFile).toUpperCase()}</span><span>{activeDetail?.insights?.framework?.[0] ?? fileCategory(activeFile)}</span><span>{sourceLineCount} lines</span>{(activeDetail?.insights?.diagnostics?.length ?? 0) > 0 && <i>{activeDetail?.insights?.diagnostics?.length} issues</i>}{highlightedLocation?.file === activeFile && <em>{lineRangeLabel(highlightedLocation.line, highlightedLocation.endLine)}</em>}</div>}
     </div>
   );
 });

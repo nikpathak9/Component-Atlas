@@ -24,6 +24,24 @@ export type ComponentAtlasUser = {
 
 const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: "select_account" });
+const PENDING_DISPLAY_NAME_KEY = "component-atlas-pending-display-name";
+
+function pendingDisplayName() {
+  try {
+    return window.sessionStorage.getItem(PENDING_DISPLAY_NAME_KEY)?.trim() ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function setPendingDisplayName(value: string | null) {
+  try {
+    if (value) window.sessionStorage.setItem(PENDING_DISPLAY_NAME_KEY, value);
+    else window.sessionStorage.removeItem(PENDING_DISPLAY_NAME_KEY);
+  } catch {
+    /* Authentication still works when session storage is unavailable. */
+  }
+}
 
 export function toComponentAtlasUser(user: User): ComponentAtlasUser {
   const displayName = user.displayName || user.email || "Component Atlas user";
@@ -37,7 +55,18 @@ export function toComponentAtlasUser(user: User): ComponentAtlasUser {
 }
 
 export function observeAuthState(callback: (user: ComponentAtlasUser | null) => void) {
-  return onAuthStateChanged(firebaseAuth, (user) => callback(user ? toComponentAtlasUser(user) : null));
+  return onAuthStateChanged(firebaseAuth, async (user) => {
+    const pendingName = user && !user.displayName ? pendingDisplayName() : "";
+    if (user && pendingName) {
+      try {
+        await updateProfile(user, { displayName: pendingName });
+        setPendingDisplayName(null);
+      } catch {
+        /* Keep the pending value so the next authenticated page can retry. */
+      }
+    }
+    callback(user ? toComponentAtlasUser(user) : null);
+  });
 }
 
 export async function signInWithGoogle() {
@@ -54,8 +83,14 @@ export async function signInWithEmail(email: string, password: string) {
 
 export async function createEmailAccount(name: string, email: string, password: string) {
   await setPersistence(firebaseAuth, browserLocalPersistence);
-  const credential = await createUserWithEmailAndPassword(firebaseAuth, email.trim(), password);
-  if (name.trim()) await updateProfile(credential.user, { displayName: name.trim() });
+  const normalizedName = name.trim();
+  setPendingDisplayName(normalizedName || null);
+  const credential = await createUserWithEmailAndPassword(firebaseAuth, email.trim(), password).catch((error) => {
+    setPendingDisplayName(null);
+    throw error;
+  });
+  if (normalizedName) await updateProfile(credential.user, { displayName: normalizedName });
+  setPendingDisplayName(null);
   await sendEmailVerification(credential.user);
   return toComponentAtlasUser(credential.user);
 }

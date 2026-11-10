@@ -2,6 +2,7 @@
 
 import {
   useCallback,
+  useDeferredValue,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -10,11 +11,14 @@ import {
 } from "react";
 import type {
   ChangeEvent,
+  CSSProperties,
+  KeyboardEvent as ReactKeyboardEvent,
   PointerEvent as ReactPointerEvent,
-  ReactElement,
   WheelEvent as ReactWheelEvent,
 } from "react";
 import Activity from "lucide-react/icons/activity";
+import AlertTriangle from "lucide-react/icons/triangle-alert";
+import ArrowLeft from "lucide-react/icons/arrow-left";
 import ArrowRight from "lucide-react/icons/arrow-right";
 import Atom from "lucide-react/icons/atom";
 import Boxes from "lucide-react/icons/boxes";
@@ -27,8 +31,8 @@ import Code2 from "lucide-react/icons/code-2";
 import Copy from "lucide-react/icons/copy";
 import Database from "lucide-react/icons/database";
 import Download from "lucide-react/icons/download";
-import Ellipsis from "lucide-react/icons/ellipsis";
 import FilePlus2 from "lucide-react/icons/file-plus-2";
+import FileWarning from "lucide-react/icons/file-warning";
 import FolderOpen from "lucide-react/icons/folder-open";
 import GitFork from "lucide-react/icons/git-fork";
 import Home from "lucide-react/icons/house";
@@ -39,9 +43,6 @@ import Minus from "lucide-react/icons/minus";
 import Monitor from "lucide-react/icons/monitor";
 import Moon from "lucide-react/icons/moon";
 import Network from "lucide-react/icons/network";
-import PanelLeft from "lucide-react/icons/panel-left";
-import PanelRight from "lucide-react/icons/panel-right";
-import Play from "lucide-react/icons/play";
 import Plus from "lucide-react/icons/plus";
 import RotateCcw from "lucide-react/icons/rotate-ccw";
 import RefreshCw from "lucide-react/icons/refresh-cw";
@@ -54,16 +55,21 @@ import Sun from "lucide-react/icons/sun";
 import Trash2 from "lucide-react/icons/trash-2";
 import Upload from "lucide-react/icons/upload";
 import Workflow from "lucide-react/icons/workflow";
-import { observeAuthState } from "./firebase/auth";
-import { firebaseProjectId } from "./firebase/config";
 import { useShallow } from "zustand/react/shallow";
 import {
   useWorkspaceUiStore,
   type FileTab,
+  type WorkspaceModal,
 } from "./stores/ui-store";
 import { useEditorStore } from "./stores/editor-store";
 import { CodePanel } from "./components/workspace/code-panel";
 import { FlowInspector } from "./components/workspace/flow-inspector";
+import { ProjectExplorer } from "./components/workspace/project-explorer";
+import { LandingHero } from "./components/landing/landing-hero";
+import { DeferredProductPreview } from "./components/landing/deferred-product-preview";
+import { LandingNavbar } from "./components/landing/landing-navbar";
+import { DialogShell } from "./components/ui/dialog-shell";
+import { useLandingReveal } from "./hooks/use-landing-reveal";
 import {
   BINARY_ASSET_PATTERN,
   DATA_FILE_PATTERN,
@@ -71,9 +77,6 @@ import {
   SOURCE_FILE_PATTERN,
   STYLE_FILE_PATTERN,
   fileCategory,
-  fileIcon,
-  fileTabIcon,
-  sourceExtension,
 } from "./lib/file-types";
 import type {
   AnalysisIssue,
@@ -89,13 +92,6 @@ import type {
   StoredWorkspaceSession,
   SyncState,
 } from "./types/workspace";
-import {
-  CloudProjectTooLargeError,
-  deleteCloudProject,
-  ensureCloudUser,
-  loadCloudProjects,
-  saveCloudProject,
-} from "./firebase/projects";
 
 const emptyDetail: NodeDetail = {
   file: "",
@@ -116,6 +112,21 @@ const emptyDetail: NodeDetail = {
   },
 };
 const THEME_STORAGE_KEY = "component-atlas-theme";
+const DIALOG_LABELS: Record<Exclude<WorkspaceModal, null>, string> = {
+  import: "Import a project",
+  paste: "Paste source code",
+  github: "Import a public GitHub repository",
+  settings: "Workspace settings",
+  report: "Import report",
+  diagnostics: "Project health diagnostics",
+  comparison: "Analysis comparison",
+  unsupported: "Unsupported project",
+  duplicate: "Duplicate project found",
+  remove: "Remove project",
+  rename: "Rename project",
+  shortcuts: "Keyboard shortcuts",
+  analysis: "Project analysis",
+};
 const analyzeProjectSources = async (
   sources: Record<string, string>,
   onProgress?: (progress: AnalyzerProgressUpdate) => void,
@@ -144,14 +155,6 @@ const MAX_GITHUB_SOURCE_BYTES = 8 * 1024 * 1024;
 const MAX_GITHUB_SUPPORTING_FILES = 180;
 const MAX_GITHUB_SUPPORTING_TEXT_BYTES = 4 * 1024 * 1024;
 
-const FILE_TABS: FileTab[] = [
-  "Files",
-  "Components",
-  "Routes",
-  "Hooks",
-  "Styles",
-  "Assets",
-];
 const nodeKindIcon = (kind: NodeKind) =>
   kind === "Page" ? (
     <Route aria-hidden='true' />
@@ -462,6 +465,7 @@ const inferProjectSourceType = (
       : "local");
 const normalizeProject = (project: ProjectWorkspace): ProjectWorkspace => ({
   ...project,
+  issues: Array.isArray(project.issues) ? project.issues : [],
   favorite: project.favorite ?? false,
   sourceType: inferProjectSourceType(project),
 });
@@ -623,8 +627,20 @@ export function ComponentAtlas({
   >({});
   const [graphMode, setGraphMode] = useState<"graph" | "flow">("graph");
   const [graphScope, setGraphScope] = useState<"focused" | "overview">("focused");
+  const [graphDepth, setGraphDepth] = useState<1 | 2 | "all">(1);
   const [graphGrouping, setGraphGrouping] = useState<"kind" | "folder">("kind");
+  const [graphLayoutStrategy, setGraphLayoutStrategy] = useState<"auto" | "grouped">("auto");
+  const [graphSpacing, setGraphSpacing] = useState<"compact" | "comfortable" | "expanded">(() =>
+    typeof window !== "undefined" && window.innerWidth <= 1380 ? "compact" : "comfortable",
+  );
+  const [showEdgeDirections, setShowEdgeDirections] = useState(true);
+  const [showViewControls, setShowViewControls] = useState(false);
+  const [hoveredGraphNode, setHoveredGraphNode] = useState("");
+  const [selectionHistory, setSelectionHistory] = useState<string[]>([]);
+  const [selectionHistoryIndex, setSelectionHistoryIndex] = useState(-1);
   const [collapsedGraphGroups, setCollapsedGraphGroups] = useState<Set<string>>(() => new Set());
+  const [diagnosticQuery, setDiagnosticQuery] = useState("");
+  const [diagnosticSeverity, setDiagnosticSeverity] = useState<"all" | "error" | "warning" | "info">("all");
   const {
     explorerWidth,
     setExplorerWidth,
@@ -633,6 +649,7 @@ export function ComponentAtlas({
     explorerCollapsed,
     setExplorerCollapsed,
     inspectorCollapsed,
+    setInspectorCollapsed,
     codeHeight,
     setCodeHeight,
     fileTab,
@@ -661,6 +678,7 @@ export function ComponentAtlas({
       explorerCollapsed: state.explorerCollapsed,
       setExplorerCollapsed: state.setExplorerCollapsed,
       inspectorCollapsed: state.inspectorCollapsed,
+      setInspectorCollapsed: state.setInspectorCollapsed,
       codeHeight: state.codeHeight,
       setCodeHeight: state.setCodeHeight,
       fileTab: state.fileTab,
@@ -688,8 +706,6 @@ export function ComponentAtlas({
     openFiles,
     setOpenFiles,
     fileQuery,
-    setFileQuery,
-    expandedFolders,
     setExpandedFolders,
     projectQuery,
     setProjectQuery,
@@ -704,8 +720,6 @@ export function ComponentAtlas({
       openFiles: state.openFiles,
       setOpenFiles: state.setOpenFiles,
       fileQuery: state.fileQuery,
-      setFileQuery: state.setFileQuery,
-      expandedFolders: state.expandedFolders,
       setExpandedFolders: state.setExpandedFolders,
       projectQuery: state.projectQuery,
       setProjectQuery: state.setProjectQuery,
@@ -789,6 +803,7 @@ export function ComponentAtlas({
   });
   const [relativeTimeNow, setRelativeTimeNow] = useState(() => Date.now());
   const [sessionReady, setSessionReady] = useState(false);
+  const [restoreStage, setRestoreStage] = useState(0);
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [projectSync, setProjectSync] = useState<Record<string, SyncState>>({});
@@ -814,6 +829,35 @@ export function ComponentAtlas({
   const cloudErrorReportedRef = useRef("");
   const analysisRunRef = useRef(0);
   const themePreferenceReadyRef = useRef(false);
+  const suppressInspectorSelectionSyncRef = useRef(false);
+  const graphViewportMemoryRef = useRef<Record<string, { zoom: number; pan: { x: number; y: number } }>>({});
+  const graphViewKeyRef = useRef("");
+  const latestGraphViewportRef = useRef({ zoom: 1, pan: { x: 0, y: 0 } });
+  const graphPreferenceMemoryRef = useRef<Record<string, { grouping: "kind" | "folder"; layout: "auto" | "grouped"; spacing: "compact" | "comfortable" | "expanded" }>>({});
+  const graphPreferenceProjectRef = useRef("");
+  const latestGraphPreferenceRef = useRef<{ grouping: "kind" | "folder"; layout: "auto" | "grouped"; spacing: "compact" | "comfortable" | "expanded" }>({ grouping: "kind", layout: "auto", spacing: "comfortable" });
+  const codeHeightInitializedRef = useRef(false);
+
+  useLayoutEffect(() => {
+    if (!showWorkspace) {
+      codeHeightInitializedRef.current = false;
+      return;
+    }
+    if (codeHeightInitializedRef.current) return;
+
+    const column = canvasColumnRef.current;
+    if (!column || column.clientHeight <= 0) return;
+
+    const toolbarHeight = selected ? 94 : 56;
+    const availableHeight = Math.max(360, column.clientHeight - toolbarHeight);
+    setCodeHeight(
+      Math.min(
+        Math.floor(availableHeight * 0.8),
+        Math.max(180, Math.floor(availableHeight * 0.5)),
+      ),
+    );
+    codeHeightInitializedRef.current = true;
+  }, [selected, setCodeHeight, showWorkspace]);
 
   const selectedDetail = projectDetails[selected] ?? emptyDetail;
   const selectedName = selectedDetail.name ?? selected;
@@ -845,6 +889,44 @@ export function ComponentAtlas({
   const activeSyncState = activeAnalysisProject
     ? (projectSync[activeAnalysisProject.id] ?? { status: "local" as const })
     : null;
+  const graphViewKey = `${activeProjectId || "empty"}:${graphScope}:${graphDepth}`;
+  latestGraphPreferenceRef.current = { grouping: graphGrouping, layout: graphLayoutStrategy, spacing: graphSpacing };
+
+  useEffect(() => {
+    latestGraphViewportRef.current = { zoom, pan: graphPan };
+  }, [graphPan, zoom]);
+
+  useEffect(() => {
+    const previousKey = graphViewKeyRef.current;
+    if (previousKey && previousKey !== graphViewKey) {
+      graphViewportMemoryRef.current[previousKey] = latestGraphViewportRef.current;
+    }
+    const remembered = graphViewportMemoryRef.current[graphViewKey];
+    if (remembered) {
+      setZoom(remembered.zoom);
+      setGraphPan(remembered.pan);
+      latestGraphViewportRef.current = remembered;
+    } else if (previousKey && previousKey !== graphViewKey) {
+      setZoom(1);
+      setGraphPan({ x: 0, y: 0 });
+      latestGraphViewportRef.current = { zoom: 1, pan: { x: 0, y: 0 } };
+    }
+    graphViewKeyRef.current = graphViewKey;
+  }, [graphViewKey]);
+
+  useEffect(() => {
+    const previousProject = graphPreferenceProjectRef.current;
+    if (previousProject && previousProject !== activeProjectId) {
+      graphPreferenceMemoryRef.current[previousProject] = latestGraphPreferenceRef.current;
+    }
+    const remembered = graphPreferenceMemoryRef.current[activeProjectId];
+    if (remembered) {
+      setGraphGrouping(remembered.grouping);
+      setGraphLayoutStrategy(remembered.layout);
+      setGraphSpacing(remembered.spacing);
+    }
+    graphPreferenceProjectRef.current = activeProjectId;
+  }, [activeProjectId]);
   const projectSearchResults = useMemo(
     () =>
       [...projects]
@@ -856,6 +938,16 @@ export function ComponentAtlas({
         ),
     [projectQuery, projects],
   );
+  const commandFileResults = useMemo(() => {
+    const query = projectQuery.trim().toLowerCase();
+    if (!query) return projectFiles.slice(0, 5);
+    return projectFiles.filter((file) => file.toLowerCase().includes(query)).slice(0, 7);
+  }, [projectFiles, projectQuery]);
+  const commandNodeResults = useMemo(() => {
+    const query = projectQuery.trim().toLowerCase();
+    if (!query) return projectNodes.slice(0, 4);
+    return projectNodes.filter((node) => node.name.toLowerCase().includes(query) || node.file.toLowerCase().includes(query)).slice(0, 6);
+  }, [projectNodes, projectQuery]);
   const activeProjectAnalyzedAt = activeAnalysisProject
     ? getProjectAnalyzedAt(activeAnalysisProject)
     : null;
@@ -895,6 +987,7 @@ export function ComponentAtlas({
         [project.id]: { ...current[project.id], status: "syncing" },
       }));
       try {
+        const { saveCloudProject } = await import("./firebase/projects");
         await saveCloudProject(authUser.userId, normalizeProject(project));
         const syncedAt = Date.now();
         setProjectSync((current) => ({
@@ -912,7 +1005,7 @@ export function ComponentAtlas({
         return true;
       } catch (error) {
         const status =
-          error instanceof CloudProjectTooLargeError ? "local-only" : "error";
+          error instanceof Error && error.name === "CloudProjectTooLargeError" ? "local-only" : "error";
         setProjectSync((current) => ({
           ...current,
           [project.id]: { ...current[project.id], status },
@@ -1007,11 +1100,30 @@ export function ComponentAtlas({
   );
 
   useEffect(() => {
-    return observeAuthState((user) => {
-      setAuthUser(user);
-      setAuthLoading(false);
-      if (user) void ensureCloudUser(user).catch(reportCloudError);
-    });
+    let active = true;
+    let unsubscribe: (() => void) | undefined;
+    void import("./firebase/auth")
+      .then(({ observeAuthState }) => {
+        if (!active) return;
+        unsubscribe = observeAuthState((user) => {
+          if (!active) return;
+          setAuthUser(user);
+          setAuthLoading(false);
+          if (user)
+            void import("./firebase/projects")
+              .then(({ ensureCloudUser }) => ensureCloudUser(user))
+              .catch(reportCloudError);
+        });
+      })
+      .catch((error) => {
+        if (!active) return;
+        setAuthLoading(false);
+        reportCloudError(error);
+      });
+    return () => {
+      active = false;
+      unsubscribe?.();
+    };
   }, [reportCloudError]);
 
   useEffect(() => {
@@ -1022,28 +1134,7 @@ export function ComponentAtlas({
     window.history.replaceState({}, "", "/");
   }, [authLoading, authUser, initialView]);
 
-  useEffect(() => {
-    if (!sessionReady || showWorkspace) return;
-    const elements = Array.from(
-      document.querySelectorAll<HTMLElement>(".landing-reveal"),
-    );
-    if (!("IntersectionObserver" in window)) {
-      elements.forEach((element) => element.classList.add("is-visible"));
-      return;
-    }
-    const observer = new IntersectionObserver(
-      (entries) =>
-        entries.forEach((entry) => {
-          if (entry.isIntersecting) {
-            entry.target.classList.add("is-visible");
-            observer.unobserve(entry.target);
-          }
-        }),
-      { threshold: 0.12, rootMargin: "0px 0px -6% 0px" },
-    );
-    elements.forEach((element) => observer.observe(element));
-    return () => observer.disconnect();
-  }, [sessionReady, showWorkspace]);
+  useLandingReveal(sessionReady && !showWorkspace);
 
   useEffect(() => {
     if (
@@ -1139,6 +1230,10 @@ export function ComponentAtlas({
 
   useEffect(() => {
     if (!activeFile) return;
+    if (suppressInspectorSelectionSyncRef.current) {
+      suppressInspectorSelectionSyncRef.current = false;
+      return;
+    }
     const activeNode = projectNodes.find((node) => node.file === activeFile);
     if (activeNode && activeNode.id !== selected) {
       setSelected(activeNode.id);
@@ -1204,18 +1299,94 @@ export function ComponentAtlas({
     [ignoredFiles],
   );
 
+  const deferredGraphNodes = useDeferredValue(projectNodes);
+  const deferredGraphEdges = useDeferredValue(projectEdges);
+  const graphLayoutPending = deferredGraphNodes !== projectNodes || deferredGraphEdges !== projectEdges;
+
+  const graphFocusNodeId = useMemo(
+    () => selected || projectNodes.find((node) => node.file === activeFile)?.id || "",
+    [activeFile, projectNodes, selected],
+  );
+
+  const scopedGraphNodeIds = useMemo(() => {
+    if (graphScope === "overview" || graphDepth === "all" || !graphFocusNodeId) {
+      return new Set(projectNodes.map((node) => node.id));
+    }
+
+    const visibleKinds = projectEdges.filter(
+      (edge) => enabledEdgeKinds[edge.kind ?? "import"],
+    );
+    const included = new Set([graphFocusNodeId]);
+    let frontier = new Set([graphFocusNodeId]);
+    for (let level = 0; level < graphDepth; level += 1) {
+      const next = new Set<string>();
+      visibleKinds.forEach((edge) => {
+        if (frontier.has(edge.from)) next.add(edge.to);
+        if (frontier.has(edge.to)) next.add(edge.from);
+      });
+      next.forEach((id) => included.add(id));
+      frontier = next;
+    }
+    return included;
+  }, [enabledEdgeKinds, graphDepth, graphFocusNodeId, graphScope, projectEdges, projectNodes]);
+
   const graphLayout = useMemo(() => {
-    const visible = projectNodes.filter((node) => enabledKinds[node.kind]);
+    const spacing = {
+      compact: { column: 220, row: 116 },
+      comfortable: { column: 260, row: 142 },
+      expanded: { column: 310, row: 174 },
+    }[graphSpacing];
+    const visible = deferredGraphNodes.filter(
+      (node) => enabledKinds[node.kind] && scopedGraphNodeIds.has(node.id),
+    );
     const groupFor = (node: GraphNode) => {
       if (graphGrouping === "kind") return node.kind;
       const parts = node.file.split("/");
       return parts[0] === "src" || parts[0] === "app" ? parts[1] || parts[0] : parts[0] || "root";
     };
     const columns = new Map<string, GraphNode[]>();
-    visible.forEach((node) => columns.set(groupFor(node), [...(columns.get(groupFor(node)) ?? []), node]));
-    const orderedGroups = Array.from(columns.keys()).sort((a, b) => graphGrouping === "kind" ? ["Page", "Component", "Hook", "Service", "Utility"].indexOf(a) - ["Page", "Component", "Hook", "Service", "Utility"].indexOf(b) : a.localeCompare(b));
+    if (graphLayoutStrategy === "auto") {
+      const visibleIds = new Set(visible.map((node) => node.id));
+      const incoming = new Map(visible.map((node) => [node.id, 0]));
+      const outgoing = new Map<string, string[]>();
+      const degree = new Map(visible.map((node) => [node.id, 0]));
+      deferredGraphEdges.forEach((edge) => {
+        if (!visibleIds.has(edge.from) || !visibleIds.has(edge.to) || !enabledEdgeKinds[edge.kind ?? "import"]) return;
+        incoming.set(edge.to, (incoming.get(edge.to) ?? 0) + 1);
+        outgoing.set(edge.from, [...(outgoing.get(edge.from) ?? []), edge.to]);
+        degree.set(edge.from, (degree.get(edge.from) ?? 0) + 1);
+        degree.set(edge.to, (degree.get(edge.to) ?? 0) + 1);
+      });
+      const ranks = new Map<string, number>();
+      const queue = visible.filter((node) => (incoming.get(node.id) ?? 0) === 0).map((node) => node.id);
+      queue.forEach((id) => ranks.set(id, 0));
+      while (queue.length) {
+        const id = queue.shift()!;
+        const rank = ranks.get(id) ?? 0;
+        (outgoing.get(id) ?? []).forEach((target) => {
+          ranks.set(target, Math.max(ranks.get(target) ?? 0, rank + 1));
+          incoming.set(target, (incoming.get(target) ?? 1) - 1);
+          if ((incoming.get(target) ?? 0) === 0) queue.push(target);
+        });
+      }
+      visible.forEach((node) => {
+        const fallbackRank = Math.max(0, ["Page", "Component", "Hook", "Service", "Utility"].indexOf(node.kind));
+        const rank = ranks.get(node.id) ?? fallbackRank;
+        const label = rank === 0 ? "Entry" : `Layer ${rank + 1}`;
+        columns.set(label, [...(columns.get(label) ?? []), node]);
+      });
+      columns.forEach((nodes, key) => columns.set(key, nodes.sort((a, b) => {
+        return (degree.get(b.id) ?? 0) - (degree.get(a.id) ?? 0) || a.name.localeCompare(b.name);
+      })));
+    } else {
+      visible.forEach((node) => columns.set(groupFor(node), [...(columns.get(groupFor(node)) ?? []), node]));
+    }
+    const orderedGroups = Array.from(columns.keys()).sort((a, b) => {
+      if (graphLayoutStrategy === "auto") return (a === "Entry" ? 0 : Number(a.replace(/\D/g, ""))) - (b === "Entry" ? 0 : Number(b.replace(/\D/g, "")));
+      return graphGrouping === "kind" ? ["Page", "Component", "Hook", "Service", "Utility"].indexOf(a) - ["Page", "Component", "Hook", "Service", "Utility"].indexOf(b) : a.localeCompare(b);
+    });
     const positions: Record<string, { x: number; y: number }> = {};
-    const groups: Array<{ name: string; x: number; count: number; collapsed: boolean }> = [];
+    const groups: Array<{ name: string; x: number; count: number; relationships: number; collapsed: boolean }> = [];
     let activeColumn = 0;
     const maxRowsPerColumn = Math.max(
       5,
@@ -1224,26 +1395,34 @@ export function ComponentAtlas({
     orderedGroups.forEach((group) => {
       const groupNodes = columns.get(group) ?? [];
       const collapsed = collapsedGraphGroups.has(group);
-      groups.push({ name: group, x: 40 + activeColumn * 240, count: groupNodes.length, collapsed });
+      const groupNodeIds = new Set(groupNodes.map((node) => node.id));
+      const relationships = deferredGraphEdges.filter((edge) =>
+        enabledEdgeKinds[edge.kind ?? "import"]
+        && (groupNodeIds.has(edge.from) || groupNodeIds.has(edge.to)),
+      ).length;
+      groups.push({ name: group, x: 44 + activeColumn * spacing.column, count: groupNodes.length, relationships, collapsed });
       const kindColumns = collapsed ? 1 : Math.ceil(groupNodes.length / maxRowsPerColumn);
       if (!collapsed) groupNodes.forEach((node, index) => {
         positions[node.id] = {
-          x: 40 + (activeColumn + Math.floor(index / maxRowsPerColumn)) * 240,
-          y: 76 + (index % maxRowsPerColumn) * 126,
+          x: 44 + (activeColumn + Math.floor(index / maxRowsPerColumn)) * spacing.column,
+          y: 74 + (index % maxRowsPerColumn) * spacing.row,
         };
       });
       activeColumn += kindColumns;
     });
-    const shownNodes = visible.filter((node) => !collapsedGraphGroups.has(groupFor(node)));
+    const nodeGroup = (node: GraphNode) => graphLayoutStrategy === "auto"
+      ? orderedGroups.find((group) => columns.get(group)?.some((candidate) => candidate.id === node.id)) ?? "Entry"
+      : groupFor(node);
+    const shownNodes = visible.filter((node) => !collapsedGraphGroups.has(nodeGroup(node)));
     const maxRows = Math.min(maxRowsPerColumn, Math.max(1, ...orderedGroups.map((group) => collapsedGraphGroups.has(group) ? 0 : (columns.get(group)?.length ?? 0))));
     return {
       nodes: shownNodes,
       positions,
       groups,
-      width: Math.max(760, 80 + Math.max(activeColumn, 1) * 240),
-      height: Math.max(420, 125 + maxRows * 126),
+      width: Math.max(760, 88 + Math.max(activeColumn, 1) * spacing.column),
+      height: Math.max(420, 116 + maxRows * spacing.row),
     };
-  }, [collapsedGraphGroups, enabledKinds, graphGrouping, projectNodes]);
+  }, [collapsedGraphGroups, deferredGraphEdges, deferredGraphNodes, enabledEdgeKinds, enabledKinds, graphGrouping, graphLayoutStrategy, graphSpacing, scopedGraphNodeIds]);
 
   useEffect(() => {
     const area = graphScrollRef.current;
@@ -1265,22 +1444,34 @@ export function ComponentAtlas({
     zoom,
   ]);
 
-  const focusedNodeId = useMemo(
-    () => projectNodes.find((node) => node.file === activeFile)?.id ?? "",
-    [activeFile, projectNodes],
-  );
+  const focusedNodeId = graphFocusNodeId;
 
-  const visibleEdges = useMemo(
-    () =>
-      projectEdges
-        .filter(
-          (edge) =>
-            enabledEdgeKinds[edge.kind ?? "import"] &&
-            (graphScope === "overview" ||
-              (focusedNodeId &&
-                (edge.from === focusedNodeId || edge.to === focusedNodeId))),
-        )
-        .flatMap((edge) => {
+  const renderedGraphNodes = useMemo(() => {
+    if (graphLayout.nodes.length < 80 || graphViewport.clientWidth === 0) return graphLayout.nodes;
+    const margin = 360;
+    const left = -graphPan.x / zoom - margin;
+    const top = -graphPan.y / zoom - margin;
+    const right = (graphViewport.clientWidth - graphPan.x) / zoom + margin;
+    const bottom = (graphViewport.clientHeight - graphPan.y) / zoom + margin;
+    return graphLayout.nodes.filter((node) => {
+      const position = graphLayout.positions[node.id];
+      return node.id === selected || node.id === hoveredGraphNode || (position.x + 180 >= left && position.x <= right && position.y + 80 >= top && position.y <= bottom);
+    });
+  }, [graphLayout, graphPan.x, graphPan.y, graphViewport.clientHeight, graphViewport.clientWidth, hoveredGraphNode, selected, zoom]);
+
+  const renderedGraphNodeIds = useMemo(() => new Set(renderedGraphNodes.map((node) => node.id)), [renderedGraphNodes]);
+
+  const visibleEdges = useMemo(() => {
+    const candidates = deferredGraphEdges.filter(
+      (edge) =>
+        enabledEdgeKinds[edge.kind ?? "import"] &&
+        graphLayout.positions[edge.from] &&
+        graphLayout.positions[edge.to] &&
+        (graphScope === "overview" || scopedGraphNodeIds.has(edge.from) || scopedGraphNodeIds.has(edge.to)),
+    );
+    const outgoing = new Map<string, GraphEdge[]>();
+    candidates.forEach((edge) => outgoing.set(edge.from, [...(outgoing.get(edge.from) ?? []), edge]));
+    return candidates.flatMap((edge) => {
           const from = graphLayout.positions[edge.from];
           const to = graphLayout.positions[edge.to];
           if (!from || !to) return [];
@@ -1302,6 +1493,21 @@ export function ComponentAtlas({
           };
           const lineDx = end.x - start.x;
           const lineDy = end.y - start.y;
+          const horizontal = Math.abs(lineDx) >= Math.abs(lineDy);
+          const siblings = outgoing.get(edge.from) ?? [edge];
+          const siblingIndex = Math.max(0, siblings.findIndex((candidate) => candidate === edge));
+          const laneOffset = (siblingIndex - (siblings.length - 1) / 2) * 12;
+          const curve = horizontal
+            ? Math.max(44, Math.abs(lineDx) * 0.42)
+            : Math.max(44, Math.abs(lineDy) * 0.42);
+          const directionX = lineDx >= 0 ? 1 : -1;
+          const directionY = lineDy >= 0 ? 1 : -1;
+          const control1 = horizontal
+            ? { x: start.x + curve * directionX, y: start.y + laneOffset }
+            : { x: start.x + laneOffset, y: start.y + curve * directionY };
+          const control2 = horizontal
+            ? { x: end.x - curve * directionX, y: end.y + laneOffset }
+            : { x: end.x + laneOffset, y: end.y - curve * directionY };
           return [
             {
               ...edge,
@@ -1309,41 +1515,92 @@ export function ComponentAtlas({
               y: start.y,
               width: Math.hypot(lineDx, lineDy),
               angle: (Math.atan2(lineDy, lineDx) * 180) / Math.PI,
+              path: `M ${start.x} ${start.y} C ${control1.x} ${control1.y}, ${control2.x} ${control2.y}, ${end.x} ${end.y}`,
+              labelX: (start.x + 3 * control1.x + 3 * control2.x + end.x) / 8,
+              labelY: (start.y + 3 * control1.y + 3 * control2.y + end.y) / 8,
             },
           ];
-        }),
-    [enabledEdgeKinds, focusedNodeId, graphLayout, graphScope, projectEdges],
+        });
+  }, [deferredGraphEdges, enabledEdgeKinds, graphLayout, graphScope, scopedGraphNodeIds]);
+
+  const renderedGraphEdges = useMemo(
+    () => graphLayout.nodes.length < 80 ? visibleEdges : visibleEdges.filter((edge) => renderedGraphNodeIds.has(edge.from) && renderedGraphNodeIds.has(edge.to)),
+    [graphLayout.nodes.length, renderedGraphNodeIds, visibleEdges],
   );
 
   const projectDiagnostics = useMemo(() => {
     const seen = new Set<string>();
-    return Object.values(projectDetails)
-      .flatMap((detail) => detail.insights?.diagnostics ?? [])
+    return [
+      ...(activeAnalysisProject?.issues ?? []),
+      ...Object.values(projectDetails).flatMap((detail) => detail.insights?.diagnostics ?? []),
+    ]
       .filter((issue) => {
         const key = `${issue.file}:${issue.line}:${issue.title}:${issue.detail}`;
         if (seen.has(key)) return false;
         seen.add(key);
         return true;
       });
-  }, [projectDetails]);
+  }, [activeAnalysisProject?.issues, projectDetails]);
+
+  const diagnosticSummary = useMemo(() => ({
+    error: projectDiagnostics.filter((issue) => (issue.severity ?? "warning") === "error").length,
+    warning: projectDiagnostics.filter((issue) => (issue.severity ?? "warning") === "warning").length,
+    info: projectDiagnostics.filter((issue) => issue.severity === "info").length,
+  }), [projectDiagnostics]);
+
+  const groupedDiagnostics = useMemo(() => {
+    const query = diagnosticQuery.trim().toLowerCase();
+    const filtered = projectDiagnostics.filter((issue) => {
+      const severity = issue.severity ?? "warning";
+      if (diagnosticSeverity !== "all" && severity !== diagnosticSeverity) return false;
+      if (!query) return true;
+      return [issue.file, issue.title, issue.detail, issue.ruleId, issue.source]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(query));
+    });
+    const byFile = new Map<string, AnalysisIssue[]>();
+    filtered.forEach((issue) => byFile.set(issue.file, [...(byFile.get(issue.file) ?? []), issue]));
+    return Array.from(byFile.entries())
+      .map(([file, issues]) => ({
+        file,
+        issues: issues.sort((a, b) => a.line - b.line || (a.column ?? 0) - (b.column ?? 0)),
+        errors: issues.filter((issue) => (issue.severity ?? "warning") === "error").length,
+        warnings: issues.filter((issue) => (issue.severity ?? "warning") === "warning").length,
+      }))
+      .sort((a, b) => b.errors - a.errors || b.warnings - a.warnings || a.file.localeCompare(b.file));
+  }, [diagnosticQuery, diagnosticSeverity, projectDiagnostics]);
+
+  const nodeSearchMatches = useMemo(() => {
+    const query = nodeQuery.trim().toLowerCase();
+    if (!query) return [];
+    return projectNodes
+      .filter((node) => node.name.toLowerCase().includes(query) || node.file.toLowerCase().includes(query))
+      .slice(0, 8);
+  }, [nodeQuery, projectNodes]);
 
   const canvasCustomizationCount = useMemo(() =>
     Object.values(enabledKinds).filter((enabled) => !enabled).length +
     Object.values(enabledEdgeKinds).filter((enabled) => !enabled).length +
     Number(graphScope !== "focused") +
+    Number(graphDepth !== 1) +
     Number(graphGrouping !== "kind") +
+    Number(graphLayoutStrategy !== "auto") +
+    Number(graphSpacing !== "comfortable") +
+    Number(!showEdgeDirections) +
     Number(!showMinimap),
-  [enabledEdgeKinds, enabledKinds, graphGrouping, graphScope, showMinimap]);
+  [enabledEdgeKinds, enabledKinds, graphDepth, graphGrouping, graphLayoutStrategy, graphScope, graphSpacing, showEdgeDirections, showMinimap]);
 
   const connectedNodeIds = useMemo(
     () =>
       new Set(
         [
-          focusedNodeId,
-          ...visibleEdges.flatMap((edge) => [edge.from, edge.to]),
+          selected || focusedNodeId,
+          ...projectEdges
+            .filter((edge) => edge.from === (selected || focusedNodeId) || edge.to === (selected || focusedNodeId))
+            .flatMap((edge) => [edge.from, edge.to]),
         ].filter(Boolean),
       ),
-    [focusedNodeId, visibleEdges],
+    [focusedNodeId, projectEdges, selected],
   );
   const selectedRelationships = useMemo(
     () =>
@@ -1554,6 +1811,13 @@ export function ComponentAtlas({
   }, []);
 
   const selectNode = useCallback((name: string) => {
+    setSelectionHistory((current) => {
+      const base = current.slice(0, selectionHistoryIndex + 1);
+      if (base.at(-1) === name) return current;
+      const next = [...base, name].slice(-30);
+      setSelectionHistoryIndex(next.length - 1);
+      return next;
+    });
     setSelected(name);
     setActiveStep(0);
     setInspectorTab("Overview");
@@ -1561,7 +1825,66 @@ export function ComponentAtlas({
     const graphNode = projectNodes.find((node) => node.id === name);
     if (detail)
       openCodeFile(graphNode?.file ?? detail.file.replace(/^src\//, ""));
-  }, [openCodeFile, projectDetails, projectNodes, setActiveStep, setInspectorTab]);
+  }, [openCodeFile, projectDetails, projectNodes, selectionHistoryIndex, setActiveStep, setInspectorTab]);
+
+  const navigateGraphWithKeyboard = useCallback((event: ReactKeyboardEvent<HTMLButtonElement>, nodeId: string) => {
+    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+    const current = graphLayout.positions[nodeId];
+    if (!current) return;
+    const currentCenter = { x: current.x + 90, y: current.y + 40 };
+    const candidates = graphLayout.nodes
+      .filter((node) => node.id !== nodeId && graphLayout.positions[node.id])
+      .map((node) => {
+        const position = graphLayout.positions[node.id];
+        const dx = position.x + 90 - currentCenter.x;
+        const dy = position.y + 40 - currentCenter.y;
+        const isDirectional = event.key === "ArrowLeft" ? dx < 0 : event.key === "ArrowRight" ? dx > 0 : event.key === "ArrowUp" ? dy < 0 : dy > 0;
+        const primary = event.key === "ArrowLeft" || event.key === "ArrowRight" ? Math.abs(dx) : Math.abs(dy);
+        const cross = event.key === "ArrowLeft" || event.key === "ArrowRight" ? Math.abs(dy) : Math.abs(dx);
+        return { node, isDirectional, score: primary + cross * 1.8 };
+      })
+      .filter((candidate) => candidate.isDirectional)
+      .sort((a, b) => a.score - b.score);
+    const target = candidates[0]?.node;
+    if (!target) return;
+    event.preventDefault();
+    selectNode(target.id);
+    window.requestAnimationFrame(() => {
+      document.querySelectorAll<HTMLButtonElement>("[data-graph-node]")
+        .forEach((button) => button.dataset.graphNode === target.id && button.focus());
+    });
+  }, [graphLayout, selectNode]);
+
+  const focusGraphNode = useCallback((nodeId: string) => {
+    selectNode(nodeId);
+    setGraphScope("focused");
+    setGraphDepth(1);
+    setCollapsedGraphGroups(new Set());
+    setNodeQuery("");
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+      const area = graphScrollRef.current;
+      const node = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-graph-node]"))
+        .find((button) => button.dataset.graphNode === nodeId);
+      if (!area || !node) return;
+      setGraphPan({
+        x: area.clientWidth / 2 - (node.offsetLeft + node.offsetWidth / 2) * zoom,
+        y: area.clientHeight / 2 - (node.offsetTop + node.offsetHeight / 2) * zoom,
+      });
+      node.focus();
+    }));
+  }, [selectNode, setNodeQuery, zoom]);
+
+  const navigateSelectionHistory = useCallback((direction: -1 | 1) => {
+    const nextIndex = selectionHistoryIndex + direction;
+    const nodeId = selectionHistory[nextIndex];
+    if (!nodeId) return;
+    setSelectionHistoryIndex(nextIndex);
+    setSelected(nodeId);
+    setActiveStep(0);
+    const detail = projectDetails[nodeId];
+    const graphNode = projectNodes.find((node) => node.id === nodeId);
+    if (detail) openCodeFile(graphNode?.file ?? detail.file.replace(/^src\//, ""));
+  }, [openCodeFile, projectDetails, projectNodes, selectionHistory, selectionHistoryIndex, setActiveStep]);
 
   const activateProject = (project: ProjectWorkspace) => {
     setActiveProjectId(project.id);
@@ -1575,6 +1898,8 @@ export function ComponentAtlas({
     setOpenFiles(project.openFiles);
     setActiveFile(project.activeFile);
     setSelected(project.selected);
+    setSelectionHistory(project.selected ? [project.selected] : []);
+    setSelectionHistoryIndex(project.selected ? 0 : -1);
     setIgnoredFiles(project.ignoredFiles);
     setReportIncludedCount(project.reportIncludedCount);
     setReportLabel(project.reportLabel);
@@ -1642,6 +1967,7 @@ export function ComponentAtlas({
         nodes: analysis.nodes,
         edges: analysis.edges,
         details: analysis.details,
+        issues: analysis.issues,
       };
       setProjects((current) =>
         current.map((entry) => (entry.id === updated.id ? updated : entry)),
@@ -1700,6 +2026,26 @@ export function ComponentAtlas({
     notify("Analysis report exported");
   };
 
+  const copyDiagnosticsReport = async () => {
+    if (!activeAnalysisProject) return;
+    const report = projectDiagnostics.map((issue) => ({
+      severity: issue.severity ?? "warning",
+      file: issue.file,
+      line: issue.line,
+      column: issue.column,
+      title: issue.title,
+      detail: issue.detail,
+      source: issue.source,
+      rule: issue.ruleId,
+    }));
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(report, null, 2));
+      notify("Diagnostics copied to clipboard");
+    } catch {
+      notify("Clipboard access is unavailable in this browser");
+    }
+  };
+
   const dismissProjectRemoval = () => {
     setProjectToRemove(null);
     setDeleteConfirmation("");
@@ -1755,15 +2101,20 @@ export function ComponentAtlas({
       showReport: false,
       theme,
     });
-    await deleteCloudProject(authUser.userId, removedProject.id).catch(() =>
-      notify("Removed locally; cloud removal will need to be retried"),
-    );
+    await import("./firebase/projects")
+      .then(({ deleteCloudProject }) =>
+        deleteCloudProject(authUser.userId, removedProject.id),
+      )
+      .catch(() =>
+        notify("Removed locally; cloud removal will need to be retried"),
+      );
     notify(`${removedProject.name} removed`);
   };
 
   useEffect(() => {
     if (authLoading) return;
     let cancelled = false;
+    let completionTimer: number | undefined;
     skipNextPersistenceRef.current = true;
     setSessionReady(false);
     if (!authUser) {
@@ -1779,10 +2130,12 @@ export function ComponentAtlas({
     }
     Promise.all([
       readWorkspaceSession(authUser.userId),
-      loadCloudProjects(authUser.userId).catch((error) => {
-        reportCloudError(error);
-        return [];
-      }),
+      import("./firebase/projects")
+        .then(({ loadCloudProjects }) => loadCloudProjects(authUser.userId))
+        .catch((error) => {
+          reportCloudError(error);
+          return [];
+        }),
     ])
       .then(([session, cloudProjects]) => {
         if (cancelled) return;
@@ -1831,10 +2184,19 @@ export function ComponentAtlas({
       })
       .catch(() => undefined)
       .finally(() => {
-        if (!cancelled) setSessionReady(true);
+        if (cancelled) return;
+        if (initialView !== "workspace") {
+          setSessionReady(true);
+          return;
+        }
+        setRestoreStage(4);
+        completionTimer = window.setTimeout(() => {
+          if (!cancelled) setSessionReady(true);
+        }, 500);
       });
     return () => {
       cancelled = true;
+      if (completionTimer) window.clearTimeout(completionTimer);
     };
   }, [
     authLoading,
@@ -1843,6 +2205,26 @@ export function ComponentAtlas({
     reportCloudError,
     syncProjectToCloud,
   ]);
+
+  useEffect(() => {
+    if (initialView !== "workspace" || sessionReady) {
+      setRestoreStage(0);
+      return;
+    }
+    if (authLoading) {
+      setRestoreStage(0);
+      return;
+    }
+    setRestoreStage(1);
+    const timer = window.setInterval(
+      () =>
+        setRestoreStage((current) =>
+          current >= 3 ? current : Math.min(current + 1, 3),
+        ),
+      700,
+    );
+    return () => window.clearInterval(timer);
+  }, [authLoading, initialView, sessionReady]);
 
   useEffect(() => {
     if (!sessionReady || !authUser) return;
@@ -1946,28 +2328,7 @@ export function ComponentAtlas({
       await syncProjectToCloud(project, true);
       return;
     }
-    const runId = ++analysisRunRef.current;
     setDuplicateProject(null);
-    setAnalysisProgress({
-      status: "setup",
-      stage: 5,
-      name: numberedName,
-      totalFiles: project.files.length,
-      processedFiles: project.files.length,
-      cachedFiles: project.files.length,
-      components: project.nodes.length,
-      imports: project.edges.length,
-      error: "",
-    });
-    setWorkspaceSetupProgress(8);
-    setModal("analysis");
-    for (const progress of [30, 58, 82, 100]) {
-      await pauseAnalysis(750);
-      if (analysisRunRef.current !== runId) return;
-      setWorkspaceSetupProgress(progress);
-    }
-    await pauseAnalysis(450);
-    if (analysisRunRef.current !== runId) return;
     const nextProjects = [...projects, project];
     await writeWorkspaceSession(authUser.userId, {
       projects: nextProjects,
@@ -1987,27 +2348,6 @@ export function ComponentAtlas({
     if (!authUser) return;
     const project =
       projects.find((item) => item.id === activeProjectId) ?? projects.at(-1);
-    const runId = ++analysisRunRef.current;
-    setAnalysisProgress({
-      status: "setup",
-      stage: 5,
-      name: project?.name ?? "Your workspace",
-      totalFiles: project?.files.length ?? 0,
-      processedFiles: project?.files.length ?? 0,
-      cachedFiles: project?.files.length ?? 0,
-      components: project?.nodes.length ?? 0,
-      imports: project?.edges.length ?? 0,
-      error: "",
-    });
-    setWorkspaceSetupProgress(8);
-    setModal("analysis");
-    for (const progress of [30, 58, 82, 100]) {
-      await pauseAnalysis(750);
-      if (analysisRunRef.current !== runId) return;
-      setWorkspaceSetupProgress(progress);
-    }
-    await pauseAnalysis(450);
-    if (analysisRunRef.current !== runId) return;
     await writeWorkspaceSession(authUser.userId, {
       projects,
       activeProjectId: project?.id ?? activeProjectId,
@@ -2078,6 +2418,7 @@ export function ComponentAtlas({
       nodes: analysis.nodes,
       edges: analysis.edges,
       details: analysis.details,
+      issues: analysis.issues,
     };
     setPendingProject(workspace);
     setAnalysisIssues(issues);
@@ -2154,16 +2495,6 @@ export function ComponentAtlas({
       await syncProjectToCloud(project, true);
       return;
     }
-    const runId = analysisRunRef.current;
-    setWorkspaceSetupProgress(8);
-    setAnalysisProgress((current) => ({ ...current, status: "setup" }));
-    for (const progress of [30, 58, 82, 100]) {
-      await pauseAnalysis(750);
-      if (analysisRunRef.current !== runId) return;
-      setWorkspaceSetupProgress(progress);
-    }
-    await pauseAnalysis(450);
-    if (analysisRunRef.current !== runId) return;
     const nextProjects = [...projects, project];
     if (canOpenLocation && location)
       window.sessionStorage.setItem(
@@ -2339,6 +2670,7 @@ export function ComponentAtlas({
         nodes: analysis.nodes,
         edges: analysis.edges,
         details: analysis.details,
+        issues: analysis.issues,
         activeFile: active,
         selected:
           analysis.nodes.find((node) => node.file === active)?.id ?? active,
@@ -2429,6 +2761,7 @@ export function ComponentAtlas({
           nodes: analysis.nodes,
           edges: analysis.edges,
           details: analysis.details,
+          issues: analysis.issues,
           selected: file,
           activeFile: file,
           openFiles: nextOpenFiles,
@@ -2704,6 +3037,10 @@ export function ComponentAtlas({
     (event: ReactPointerEvent<HTMLDivElement>) => beginResize("code", event),
     [beginResize],
   );
+  const handleExplorerResize = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => beginResize("explorer", event),
+    [beginResize],
+  );
   const handleInspectorResize = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) =>
       beginResize("inspector", event),
@@ -2727,13 +3064,42 @@ export function ComponentAtlas({
     (file: string, line: number, endLine = line) => {
       const safeLine = Math.max(1, line);
       const safeEndLine = Math.max(safeLine, endLine);
+      if (file !== activeFile) suppressInspectorSelectionSyncRef.current = true;
       void openProjectFile(file);
       setHighlightedLocation({ file, line: safeLine, endLine: safeEndLine });
       notify(
         `Opened ${file.split("/").at(-1) ?? file} at ${lineRangeLabel(safeLine, safeEndLine).toLowerCase()}`,
       );
     },
-    [notify, openProjectFile],
+    [activeFile, notify, openProjectFile],
+  );
+
+  const focusLoadedCodeLocation = useCallback(
+    (file: string, line: number, endLine = line) => {
+      const safeLine = Math.max(1, line);
+      const safeEndLine = Math.max(safeLine, endLine);
+      const matchingLoadedFile =
+        fileSources[file] !== undefined
+          ? file
+          : Object.keys(fileSources).find(
+              (loadedFile) =>
+                loadedFile.endsWith(`/${file}`) || file.endsWith(`/${loadedFile}`),
+            );
+      const targetFile = matchingLoadedFile ?? activeFile;
+      if (!targetFile) {
+        notify("Open the source file before jumping to this diagnostic");
+        return;
+      }
+      setActiveFile(targetFile);
+      setOpenFiles((current) =>
+        current.includes(targetFile) ? current : [...current, targetFile],
+      );
+      setHighlightedLocation({ file: targetFile, line: safeLine, endLine: safeEndLine });
+      notify(
+        `Highlighted ${targetFile.split("/").at(-1) ?? targetFile} at ${lineRangeLabel(safeLine, safeEndLine).toLowerCase()}`,
+      );
+    },
+    [activeFile, fileSources, notify],
   );
 
   useEffect(() => {
@@ -2762,98 +3128,8 @@ export function ComponentAtlas({
     }
   }, [sessionReady, showWorkspace]);
 
-  const fileTreeRows = useMemo(() => {
-    type TreeNode = { folders: Map<string, TreeNode>; files: string[] };
-    const root: TreeNode = { folders: new Map(), files: [] };
-    filteredFiles.slice().sort((a, b) => a.localeCompare(b)).forEach((file) => {
-      const parts = file.split("/");
-      let node = root;
-      parts.slice(0, -1).forEach((folder) => {
-        if (!node.folders.has(folder)) node.folders.set(folder, { folders: new Map(), files: [] });
-        node = node.folders.get(folder)!;
-      });
-      node.files.push(file);
-    });
-    const rows: ReactElement[] = [];
-    const nestedFiles = (node: TreeNode): string[] => [
-      ...node.files,
-      ...Array.from(node.folders.values()).flatMap(nestedFiles),
-    ];
-    const renderNode = (node: TreeNode, parentPath: string, depth: number) => {
-      Array.from(node.folders.entries()).sort(([a], [b]) => a.localeCompare(b)).forEach(([name, child]) => {
-        const path = parentPath ? `${parentPath}/${name}` : name;
-        const open = fileQuery ? true : expandedFolders.has(path);
-        const files = nestedFiles(child);
-        const issueCount = files.reduce(
-          (total, file) => total + (projectDetails[file]?.insights?.diagnostics?.length ?? 0),
-          0,
-        );
-        const toggleFolder = () => setExpandedFolders((current) => {
-          const next = new Set(current);
-          if (next.has(path)) next.delete(path); else next.add(path);
-          return next;
-        });
-        rows.push(
-          <button
-            aria-expanded={open}
-            className={`directory-row ${open ? "is-open" : ""}`}
-            data-depth={depth}
-            key={`folder:${path}`}
-            style={{ paddingLeft: `${14 + depth * 16}px` }}
-            title={`${path} · ${files.length} file${files.length === 1 ? "" : "s"}`}
-            onClick={toggleFolder}
-            onKeyDown={(event) => {
-              if (event.key === "ArrowRight" && !open) { event.preventDefault(); toggleFolder(); }
-              if (event.key === "ArrowLeft" && open) { event.preventDefault(); toggleFolder(); }
-            }}
-          >
-            {open ? <ChevronDown aria-hidden='true' /> : <ChevronRight aria-hidden='true' />}
-            <FolderOpen aria-hidden='true' />
-            <span className='file-name'>{name}</span>
-            {issueCount > 0 && <i className='tree-issue-count' title={`${issueCount} analysis issues`}>{issueCount}</i>}
-            <em>{files.length}</em>
-          </button>,
-        );
-        if (open) renderNode(child, path, depth + 1);
-      });
-      node.files.forEach((file) => {
-        const extension = sourceExtension(file);
-        const issueCount = projectDetails[file]?.insights?.diagnostics?.length ?? 0;
-        rows.push(
-          <button
-            aria-current={file === activeFile ? "page" : undefined}
-            className={`${file === activeFile ? "active-file " : ""}${issueCount ? "has-tree-issues " : ""}file-row file-type-${extension} file-category-${fileCategory(file)}`}
-            data-depth={depth}
-            key={file}
-            style={{ paddingLeft: `${22 + depth * 16}px` }}
-            title={`${file} · ${extension.toUpperCase()} ${fileCategory(file)} · Right-click to copy path`}
-            onClick={() => openProjectFile(file)}
-            onContextMenu={(event) => {
-              event.preventDefault();
-              void navigator.clipboard?.writeText(file);
-              notify(`Copied ${file}`);
-            }}
-          >
-            {fileIcon(file)}
-            <span className='file-name'>{file.split("/").at(-1)}</span>
-            {issueCount > 0 && <i className='tree-issue-count' title={`${issueCount} analysis issue${issueCount === 1 ? "" : "s"}`}>{issueCount}</i>}
-            <em className='file-extension'>{extension}</em>
-          </button>,
-        );
-      });
-    };
-    renderNode(root, "", 0);
-    return rows;
-  }, [activeFile, expandedFolders, fileQuery, filteredFiles, notify, openProjectFile, projectDetails]);
-
   const findNode = (value: string) => {
     setNodeQuery(value);
-    const match = projectNodes.find(
-      (node) =>
-        node.name.toLowerCase().includes(value.toLowerCase()) ||
-        node.file.toLowerCase().includes(value.toLowerCase()),
-    );
-    if (value && match) selectNode(match.id);
   };
 
   const analysisSteps = [
@@ -3144,6 +3420,52 @@ export function ComponentAtlas({
         </div>
       </div>
     ) : null;
+  const importContent =
+    modal === "import" ? (
+      <div className='import-dialog'>
+        <header>
+          <img className='logo' src='/component-atlas-logo.png' alt='' />
+          <strong>Component Atlas</strong>
+        </header>
+        <div className='import-dialog-body'>
+          <div className='import-visual' aria-hidden='true'>
+            <i><Boxes /></i>
+            <i><Code2 /></i>
+            <i><Workflow /></i>
+          </div>
+          <span className='import-kicker'>START EXPLORING</span>
+          <h2>Map a modern codebase</h2>
+          <p>
+            Import a React, Next.js, SolidJS, LightningJS, or Vue project.
+            Atlas analyzes it statically—your code is never executed.
+          </p>
+          <div className='import-choices'>
+            <button className='import-choice-folder' onClick={() => fileInputRef.current?.click()}>
+              <i><FolderOpen aria-hidden='true' /></i>
+              <span><b>Upload folder</b><small>Select a supported project from your device</small></span>
+              <ArrowRight aria-hidden='true' />
+            </button>
+            <button className='import-choice-repository' onClick={() => setModal("github")}>
+              <i><GitFork aria-hidden='true' /></i>
+              <span><b>Import repository</b><small>Connect a public GitHub repository</small></span>
+              <ArrowRight aria-hidden='true' />
+            </button>
+          </div>
+          <div className='import-secondary-choice'>
+            <span>
+              <b>Working with a small example?</b>
+              <small>Snippet analysis is useful for one component, but project-wide relationships may be limited.</small>
+            </span>
+            <button onClick={() => openPasteDialog("new")}>
+              <Code2 aria-hidden='true' /> Analyze a code snippet <ArrowRight aria-hidden='true' />
+            </button>
+          </div>
+          <small className='import-privacy'>
+            <Check aria-hidden='true' /> Static analysis only · Runs securely in your workspace
+          </small>
+        </div>
+      </div>
+    ) : null;
   const pasteContent =
     modal === "paste" ? (
       <div className='paste-dialog'>
@@ -3190,6 +3512,7 @@ export function ComponentAtlas({
           </div>
         )}
         <textarea
+          aria-label='Source code to analyze'
           value={pasteCode}
           onChange={(event) => {
             setPasteCode(event.target.value);
@@ -3239,14 +3562,49 @@ export function ComponentAtlas({
   if (!sessionReady)
     return (
       <main
-        key='session-restore'
-        data-app-view='session-restore'
-        className={`session-restore-page ${theme === "light" ? "light-theme" : ""}`}
+        key={initialView === "workspace" ? "session-restore" : "landing-entry"}
+        data-app-view={initialView === "workspace" ? "session-restore" : "landing-entry"}
+        className={`session-restore-page ${initialView === "landing" ? "landing-entry-page" : ""} ${theme === "light" ? "light-theme" : ""}`}
       >
         <img src='/component-atlas-logo.png' alt='' />
-        <span />
-        <h1>Restoring your workspace</h1>
-        <p>Loading your saved projects and last open view…</p>
+        <span className={restoreStage >= 4 ? "restore-progress-complete" : ""} />
+        <h1>{initialView === "workspace" ? "Restoring your workspace" : "Opening Component Atlas"}</h1>
+        <p>{initialView === "workspace" ? "Loading your saved projects and last open view…" : "Preparing the home page and checking your session…"}</p>
+        {initialView === "workspace" && (
+          <div className='restore-status-card' role='status' aria-live='polite'>
+            <div className='restore-status-heading'>
+              <strong>{restoreStage >= 4 ? "Workspace restored" : [
+                "Checking your session",
+                "Loading saved projects",
+                "Restoring your last view",
+                "Preparing the workspace",
+              ][restoreStage]}</strong>
+              <span>{restoreStage >= 4 ? "Ready" : `Step ${restoreStage + 1} of 4`}</span>
+            </div>
+            <ol className='restore-status-steps'>
+              {[
+                ["Checking your session", "Confirming your account and preferences"],
+                ["Loading saved projects", "Reading local and cloud project data"],
+                ["Restoring your last view", "Opening the project you used most recently"],
+                ["Preparing the workspace", "Getting the graph and code panels ready"],
+              ].map(([title, description], index) => (
+                <li
+                  key={title}
+                  className={index < restoreStage ? "is-complete" : index === restoreStage ? "is-active" : ""}
+                >
+                  <span className='restore-step-icon'>
+                    {index < restoreStage ? <Check size={14} strokeWidth={3} /> : index === restoreStage ? <RefreshCw size={14} /> : index + 1}
+                  </span>
+                  <span className='restore-step-copy'>
+                    <strong>{title}</strong>
+                    <small>{description}</small>
+                  </span>
+                </li>
+              ))}
+            </ol>
+            <p className='restore-status-note'>Your projects remain safely stored while the workspace is restored.</p>
+          </div>
+        )}
       </main>
     );
 
@@ -3344,80 +3702,16 @@ export function ComponentAtlas({
         className={`landing-shell ${theme === "light" ? "landing-light" : ""}`}
         onClick={() => menu && setMenu(null)}
       >
-        <nav className='landing-nav'>
-          <a className='landing-brand' href='#top'>
-            <img className='logo' src='/component-atlas-logo.png' alt='' />
-            <strong>Component Atlas</strong>
-          </a>
-          <div className='landing-nav-links'>
-            <div className='landing-nav-sections'>
-              <a href='#product'>Product</a>
-              <a href='#how-it-works'>How it works</a>
-              <a href='#security'>Security</a>
-            </div>
-            <div className='landing-nav-actions'>
-              <button
-                className='landing-theme-toggle'
-                aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
-                title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
-                onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-              >
-                {theme === "dark" ? (
-                  <Sun aria-hidden='true' />
-                ) : (
-                  <Moon aria-hidden='true' />
-                )}
-              </button>
-              {authUser && (
-                <button
-                  className='landing-dashboard-link'
-                  onClick={openSavedWorkspace}
-                >
-                  <Monitor aria-hidden='true' /> Open dashboard
-                </button>
-              )}
-              {!authLoading &&
-                (authUser ? (
-                  <div className='menu-wrap landing-account'>
-                    <button
-                      className='landing-profile'
-                      aria-label='Open profile menu'
-                      aria-haspopup='menu'
-                      aria-expanded={menu === "account"}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        setMenu(menu === "account" ? null : "account");
-                      }}
-                    >
-                      {authInitials}
-                    </button>
-                    {menu === "account" && (
-                      <div
-                        className='popover account-menu landing-account-menu'
-                        role='menu'
-                        onClick={(event) => event.stopPropagation()}
-                      >
-                        <strong>{authUser.displayName}</strong>
-                        <span>{authUser.email}</span>
-                        <a href='/login?signout=1&return_to=%2F'>
-                          <LogOut aria-hidden='true' /> Log out
-                        </a>
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <>
-                    <a className='landing-login' href='/login?return_to=%2F'>
-                      Sign in
-                    </a>
-                    <a className='landing-signup' href='/signup?return_to=%2F'>
-                      Get started <ArrowRight aria-hidden='true' />
-                    </a>
-                  </>
-                ))}
-            </div>
-          </div>
-        </nav>
+        <LandingNavbar
+          theme={theme}
+          authUser={authUser}
+          authLoading={authLoading}
+          authInitials={authInitials}
+          accountOpen={menu === "account"}
+          onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
+          onOpenWorkspace={openSavedWorkspace}
+          onToggleAccount={() => setMenu(menu === "account" ? null : "account")}
+        />
 
         <input
           ref={fileInputRef}
@@ -3428,167 +3722,12 @@ export function ComponentAtlas({
           {...({ webkitdirectory: "" } as { webkitdirectory: string })}
         />
 
-        <section className='landing-hero landing-reveal' id='top'>
-          <div className='hero-copy'>
-            <div className='hero-eyebrow'>
-              <i /> Analysis for modern web frameworks
-            </div>
-            <h1>
-              <strong>
-                Understand any
-                <br />
-                codebase.
-              </strong>
-              <span>
-                Before you touch
-                <br />a line.
-              </span>
-            </h1>
-            <p>
-              Upload a React, Next.js, Remix, SolidJS, LightningJS, or Vue
-              JavaScript/TypeScript project and get an interactive map of its
-              components, data flow, state, routes, and execution paths—without
-              running the code.
-            </p>
-            <div className='hero-actions'>
-              <button
-                className='hero-upload'
-                disabled={authLoading}
-                title={
-                  authUser
-                    ? "Import and analyze a project"
-                    : "Create an account to analyze a project"
-                }
-                onClick={beginProjectJourney}
-              >
-                {authUser ? (
-                  <>
-                    <Upload className='upload-icon' aria-hidden='true' /> Import
-                    your project{" "}
-                    <ArrowRight className='button-arrow' aria-hidden='true' />
-                  </>
-                ) : (
-                  <>
-                    <Network className='upload-icon' aria-hidden='true' />{" "}
-                    Analyze your project{" "}
-                    <ArrowRight className='button-arrow' aria-hidden='true' />
-                  </>
-                )}
-              </button>
-              <a className='hero-tour' href='#product'>
-                <span>
-                  <Play aria-hidden='true' />
-                </span>{" "}
-                See how it works
-              </a>
-            </div>
-            <div className='hero-support'>
-              <span>
-                <Check aria-hidden='true' /> Your source stays private
-              </span>
-              <span>
-                <Check aria-hidden='true' /> No code execution
-              </span>
-              <span>
-                <Check aria-hidden='true' /> React · Next.js · Remix · Solid ·
-                Lightning · Vue
-              </span>
-            </div>
-          </div>
-          <div
-            className='hero-product'
-            aria-label='Preview of the Component Atlas analysis workspace'
-          >
-            <div className='hero-product-glow' />
-            <div className='hero-shot'>
-              <div className='hero-shot-top'>
-                <strong>
-                  <img src='/component-atlas-logo.png' alt='' /> Component Atlas
-                </strong>
-                <em>acme-dashboard</em>
-                <small>● Analysis complete</small>
-              </div>
-              <div className='hero-shot-body'>
-                <aside>
-                  <h3>PROJECT EXPLORER</h3>
-                  <p>▱ src</p>
-                  <ul>
-                    <li className='active'>⌁ Dashboard.tsx</li>
-                    <li>▦ Header.tsx</li>
-                    <li>▦ ActivityFeed.tsx</li>
-                    <li>↪ useActivity.ts</li>
-                    <li>⬡ activityApi.ts</li>
-                  </ul>
-                </aside>
-                <section>
-                  <header>
-                    <b>Component graph</b>
-                    <small>7 nodes · 8 relationships</small>
-                  </header>
-                  <div className='hero-shot-graph'>
-                    <i className='shot-edge shot-edge-a' />
-                    <i className='shot-edge shot-edge-b' />
-                    <i className='shot-edge shot-edge-c' />
-                    <i className='shot-edge shot-edge-d' />
-                    <div className='shot-node shot-node-a'>
-                      <b>Dashboard</b>
-                      <small>pages/Dashboard.tsx</small>
-                    </div>
-                    <div className='shot-node shot-node-b'>
-                      <b>Header</b>
-                      <small>components/Header.tsx</small>
-                    </div>
-                    <div className='shot-node shot-node-c'>
-                      <b>ActivityFeed</b>
-                      <small>components/ActivityFeed.tsx</small>
-                    </div>
-                    <div className='shot-node shot-node-d'>
-                      <b>useActivity</b>
-                      <small>hooks/useActivity.ts</small>
-                    </div>
-                    <div className='shot-node shot-node-e'>
-                      <b>activityApi</b>
-                      <small>services/activityApi.ts</small>
-                    </div>
-                  </div>
-                  <pre>
-                    <code>
-                      <i>useEffect</i>
-                      {"(() => activityApi.fetchActivity(), []);"}
-                    </code>
-                  </pre>
-                </section>
-                <aside className='hero-shot-inspector'>
-                  <h3>FLOW INSPECTOR</h3>
-                  <h4>Dashboard</h4>
-                  <small>pages/Dashboard.tsx</small>
-                  <div>
-                    <b>
-                      Props <em>3</em>
-                    </b>
-                    <b>
-                      Hooks <em>2</em>
-                    </b>
-                  </div>
-                  <h5>HOW IT WORKS</h5>
-                  <ol>
-                    <li>1&nbsp; Route opens</li>
-                    <li>2&nbsp; State initializes</li>
-                    <li className='active'>3&nbsp; API request data</li>
-                    <li>4&nbsp; Response updates state</li>
-                  </ol>
-                </aside>
-              </div>
-            </div>
-            <span className='hero-shot-chip chip-private'>
-              ✓&nbsp; Static analysis only
-            </span>
-            <span className='hero-shot-chip chip-flow'>
-              ⌁ <b>Data flow traced</b>
-              <small>Dashboard → ActivityFeed</small>
-            </span>
-          </div>
-        </section>
+        <LandingHero
+          authenticated={Boolean(authUser)}
+          authLoading={authLoading}
+          theme={theme}
+          onPrimaryAction={beginProjectJourney}
+        />
 
         <section className='landing-capability-strip landing-reveal'>
           <small>
@@ -3613,174 +3752,21 @@ export function ComponentAtlas({
           </span>
         </section>
 
-        <section
-          className='landing-preview-section landing-reveal'
-          id='product'
-        >
-          <div className='landing-section-copy'>
-            <span>SEE THE WHOLE SYSTEM</span>
-            <h2>From file tree to execution flow</h2>
-            <p>
-              Atlas turns source code into a navigable model. Select any
-              component to see where its data comes from and what happens next.
-            </p>
+        <section className='landing-analysis-stack landing-reveal' aria-labelledby='analysis-stack-title'>
+          <div>
+            <span>ENGINEERED FOR REAL CODEBASES</span>
+            <h2 id='analysis-stack-title'>Analysis you can inspect, not a black box.</h2>
+            <p>Component Atlas combines syntax trees, TypeScript semantics, lint diagnostics, and dependency resolution to explain why every connection exists.</p>
           </div>
-          <div className='preview-switchers'>
-            <article>
-              <i>
-                <Network aria-hidden='true' />
-              </i>
-              <span>
-                <b>Component graph</b>
-                <small>See every relationship</small>
-              </span>
-            </article>
-            <article>
-              <i>
-                <Workflow aria-hidden='true' />
-              </i>
-              <span>
-                <b>Execution flow</b>
-                <small>Follow behavior step by step</small>
-              </span>
-            </article>
-            <article>
-              <i>
-                <Code2 aria-hidden='true' />
-              </i>
-              <span>
-                <b>Connected source</b>
-                <small>Jump directly to the code</small>
-              </span>
-            </article>
-          </div>
-          <div
-            className='landing-product-frame'
-            role='img'
-            aria-label='Component Atlas workspace preview showing a file explorer, component graph, source code, and flow inspector'
-          >
-            <div className='demo-topbar'>
-              <div>
-                <i />
-                <i />
-                <i />
-              </div>
-              <strong>
-                <img src='/component-atlas-logo.png' alt='' /> Component Atlas
-              </strong>
-              <em>acme-dashboard⌄</em>
-              <small>● Analysis complete</small>
-              <b>Search project&nbsp;&nbsp; ⌘ K</b>
-            </div>
-            <div className='demo-workspace'>
-              <aside className='demo-explorer'>
-                <h3>PROJECT EXPLORER</h3>
-                <button>↥ Import project</button>
-                <label>⌕ Search files...</label>
-                <p>
-                  ⌄ ▱ <b>src</b>
-                </p>
-                <ul>
-                  <li>└─ App.tsx</li>
-                  <li className='demo-active'>└─ Dashboard.tsx</li>
-                  <li>└─ Header.tsx</li>
-                  <li>└─ ActivityFeed.tsx</li>
-                  <li>└─ useActivity.ts</li>
-                </ul>
-              </aside>
-              <div className='demo-center'>
-                <div className='demo-toolbar'>
-                  <b>◇ Component graph</b>
-                  <span>7 nodes · 8 relationships</span>
-                  <i>Find node&nbsp;&nbsp; Filter</i>
-                </div>
-                <div className='demo-graph'>
-                  <i className='demo-edge edge-a' />
-                  <i className='demo-edge edge-b' />
-                  <i className='demo-edge edge-c' />
-                  <div className='demo-node node-a'>
-                    <b>Dashboard</b>
-                    <small>pages/Dashboard.tsx</small>
-                  </div>
-                  <div className='demo-node node-b'>
-                    <b>Header</b>
-                    <small>components/Header.tsx</small>
-                  </div>
-                  <div className='demo-node node-c'>
-                    <b>ActivityFeed</b>
-                    <small>components/ActivityFeed.tsx</small>
-                  </div>
-                  <div className='demo-node node-d'>
-                    <b>useActivity</b>
-                    <small>hooks/useActivity.ts</small>
-                  </div>
-                  <div className='demo-legend'>
-                    ━ Import / render&nbsp;&nbsp; <span>━ Data flow</span>
-                    &nbsp;&nbsp; ┄ Callback
-                  </div>
-                </div>
-                <div className='demo-code'>
-                  <div>
-                    <b>Dashboard.tsx</b>
-                    <span>useActivity.ts</span>
-                    <em>Source preview</em>
-                  </div>
-                  <pre>
-                    <code>
-                      <i>import</i> {"{ Header }"} <i>from</i>{" "}
-                      <q>&quot;../components/Header&quot;</q>;{`\n`}
-                      <i>export function</i> <strong>Dashboard</strong>() {"{"}
-                      {`\n  `}
-                      <i>const</i> {"{ activities }"} ={" "}
-                      <strong>useActivity</strong>();{`\n  `}
-                      <i>return</i> &lt;<strong>ActivityFeed</strong> items=
-                      {"{activities}"} /&gt;;{`\n`}
-                      {"}"}
-                    </code>
-                  </pre>
-                </div>
-              </div>
-              <aside className='demo-inspector'>
-                <h3>FLOW INSPECTOR</h3>
-                <div className='demo-file-title'>
-                  <i>⌁</i>
-                  <span>
-                    <b>Dashboard</b>
-                    <small>pages/Dashboard.tsx</small>
-                  </span>
-                </div>
-                <nav>Overview&nbsp;&nbsp; Relations&nbsp;&nbsp; Source</nav>
-                <div className='demo-metrics'>
-                  <span>
-                    Props <b>3</b>
-                  </span>
-                  <span>
-                    State <b>1</b>
-                  </span>
-                  <span>
-                    Effects <b>2</b>
-                  </span>
-                  <span>
-                    Events <b>2</b>
-                  </span>
-                </div>
-                <h4>HOW THIS FILE WORKS</h4>
-                <ol>
-                  <li>
-                    <b>1</b> Dashboard renders
-                  </li>
-                  <li className='demo-step'>
-                    <b>2</b> useActivity loads data
-                  </li>
-                  <li>
-                    <b>3</b> ActivityFeed receives items
-                  </li>
-                </ol>
-              </aside>
-            </div>
-          </div>
+          <ul>
+            <li><Code2 aria-hidden='true' /><span><b>Babel AST</b><small>Understands modern JavaScript and JSX structure</small></span></li>
+            <li><Atom aria-hidden='true' /><span><b>TypeScript</b><small>Resolves symbols, types, imports, and references</small></span></li>
+            <li><Activity aria-hidden='true' /><span><b>ESLint diagnostics</b><small>Surfaces actionable issues beside the source</small></span></li>
+            <li><Workflow aria-hidden='true' /><span><b>Dependency graph</b><small>Maps render, data, callback, API, and route paths</small></span></li>
+          </ul>
         </section>
 
+        <DeferredProductPreview theme={theme} />
         <section className='landing-steps landing-reveal' id='how-it-works'>
           <div className='landing-steps-heading'>
             <span>ZERO SETUP</span>
@@ -3891,107 +3877,21 @@ export function ComponentAtlas({
           modal === "unsupported" ||
           modal === "duplicate" ||
           modal === "analysis") && (
-          <div
-            className='modal-backdrop'
-            role='presentation'
-            onMouseDown={() =>
-              modal === "duplicate"
-                ? dismissDuplicateProject()
-                : modal !== "analysis" && setModal(null)
+          <DialogShell
+            label={DIALOG_LABELS[modal]}
+            size={modal === "import" || modal === "analysis" ? "large" : "medium"}
+            tone={modal === "unsupported" ? "warning" : modal === "duplicate" ? "info" : "default"}
+            className={`${modal === "import" ? "import-modal" : ""} ${modal === "duplicate" ? "duplicate-modal" : ""} ${modal === "analysis" ? "analysis-modal" : ""}`}
+            closeOnBackdrop={modal !== "analysis"}
+            onClose={
+              modal === "analysis"
+                ? cancelProjectAnalysis
+                : modal === "duplicate"
+                  ? dismissDuplicateProject
+                  : () => setModal(null)
             }
           >
-            <section
-              className={`modal-card ${modal === "import" ? "import-modal" : ""} ${modal === "duplicate" ? "duplicate-modal" : ""} ${modal === "analysis" ? "analysis-modal" : ""}`}
-              role='dialog'
-              aria-modal='true'
-              aria-label={`${modal} dialog`}
-              onMouseDown={(event) => event.stopPropagation()}
-            >
-              <button
-                className='modal-close'
-                aria-label='Close dialog'
-                onClick={
-                  modal === "analysis"
-                    ? cancelProjectAnalysis
-                    : modal === "duplicate"
-                      ? dismissDuplicateProject
-                      : () => setModal(null)
-                }
-              >
-                ×
-              </button>
-              {modal === "import" && (
-                <div className='import-dialog'>
-                  <header>
-                    <img
-                      className='logo'
-                      src='/component-atlas-logo.png'
-                      alt=''
-                    />
-                    <strong>Component Atlas</strong>
-                  </header>
-                  <div className='import-dialog-body'>
-                    <div className='import-visual' aria-hidden='true'>
-                      <i>
-                        <Boxes />
-                      </i>
-                      <i>
-                        <Code2 />
-                      </i>
-                      <i>
-                        <Workflow />
-                      </i>
-                    </div>
-                    <span className='import-kicker'>START EXPLORING</span>
-                    <h2>Map a modern codebase</h2>
-                    <p>
-                      Import a React, Next.js, SolidJS, or LightningJS project.
-                      Atlas analyzes it statically—your code is never executed.
-                    </p>
-                    <div className='import-choices'>
-                      <button onClick={() => fileInputRef.current?.click()}>
-                        <i>
-                          <FolderOpen aria-hidden='true' />
-                        </i>
-                        <span>
-                          <b>Upload folder</b>
-                          <small>
-                            Select a supported project from your device
-                          </small>
-                        </span>
-                        <ArrowRight aria-hidden='true' />
-                      </button>
-                      <button onClick={() => openPasteDialog("new")}>
-                        <i>
-                          <Code2 aria-hidden='true' />
-                        </i>
-                        <span>
-                          <b>Paste code</b>
-                          <small>
-                            Create a new project from a component or small code
-                            sample
-                          </small>
-                        </span>
-                        <ArrowRight aria-hidden='true' />
-                      </button>
-                      <button onClick={() => setModal("github")}>
-                        <i>
-                          <GitFork aria-hidden='true' />
-                        </i>
-                        <span>
-                          <b>Import repository</b>
-                          <small>Connect a public GitHub repository</small>
-                        </span>
-                        <ArrowRight aria-hidden='true' />
-                      </button>
-                    </div>
-                    <small className='import-privacy'>
-                      <Check aria-hidden='true' /> Static analysis only · Runs
-                      securely in your workspace
-                    </small>
-                  </div>
-                </div>
-              )}
+              {importContent}
               {pasteContent}
               {modal === "github" && (
                 <div className='github-import-dialog'>
@@ -4053,8 +3953,7 @@ export function ComponentAtlas({
               )}
               {duplicateContent}
               {analysisContent}
-            </section>
-          </div>
+          </DialogShell>
         )}
         {toast && (
           <div className='toast' role='status'>
@@ -4100,13 +3999,6 @@ export function ComponentAtlas({
           <img className='logo' src='/component-atlas-logo.png' alt='' />
           <strong>Component Atlas</strong>
         </div>
-        <button
-          className='dashboard-home control-button'
-          title='Back to Component Atlas home'
-          onClick={() => window.location.assign("/")}
-        >
-          <Home aria-hidden='true' /> Back to home
-        </button>
         <div className='menu-wrap'>
           <button
             className='project control-button'
@@ -4254,9 +4146,6 @@ export function ComponentAtlas({
             </div>
           )}
         </div>
-        <span className='react-badge' title='Detected framework'>
-          <Atom aria-hidden='true' /> {activeFramework}
-        </span>
         {activeAnalysisProject &&
           activeAnalysisProject.files.length > 0 &&
           activeProjectAnalyzedAt && (
@@ -4271,38 +4160,6 @@ export function ComponentAtlas({
               </small>
             </span>
           )}
-        {activeAnalysisProject && activeSyncState && (
-          <button
-            className={`sync-status sync-${activeSyncState.status}`}
-            title={`${sourceTypeLabel(activeAnalysisProject)} project · Firebase ${firebaseProjectId} · (default) database`}
-            onClick={() =>
-              activeSyncState.status === "error" ||
-              activeSyncState.status === "local-only"
-                ? void syncProjectToCloud(activeAnalysisProject)
-                : undefined
-            }
-          >
-            {activeSyncState.status === "syncing" ? (
-              <RefreshCw aria-hidden='true' />
-            ) : activeSyncState.status === "synced" ? (
-              <Cloud aria-hidden='true' />
-            ) : (
-              <CloudOff aria-hidden='true' />
-            )}
-            <span>
-              {sourceTypeLabel(activeAnalysisProject)} ·{" "}
-              {activeSyncState.status === "syncing"
-                ? "Syncing…"
-                : activeSyncState.status === "synced"
-                  ? `Cloud synced ${activeSyncState.lastSyncedAt ? formatAnalysisAge(activeSyncState.lastSyncedAt, relativeTimeNow) : ""}`.trim()
-                  : activeSyncState.status === "error"
-                    ? "Retry sync"
-                    : activeSyncState.status === "local-only"
-                      ? "Local only"
-                      : "This device"}
-            </span>
-          </button>
-        )}
         <div className='header-spacer' />
         <div
           className='search-wrap'
@@ -4310,12 +4167,12 @@ export function ComponentAtlas({
         >
           <label
             className='search'
-            title='Search saved projects (Command K on Mac, Control K on Windows/Linux)'
+            title='Search projects, files, nodes, and commands (Command K on Mac, Control K on Windows/Linux)'
           >
             <Search aria-hidden='true' />
             <input
               ref={headerSearchRef}
-              aria-label='Search saved projects'
+              aria-label='Search projects, files, nodes, and commands'
               value={projectQuery}
               onFocus={() => setMenu("projectSearch")}
               onChange={(event) => {
@@ -4328,7 +4185,7 @@ export function ComponentAtlas({
                   setProjectQuery("");
                 }
               }}
-              placeholder='Search projects'
+              placeholder='Search or run a command'
             />
             <kbd>⌘ K / Ctrl K</kbd>
           </label>
@@ -4338,9 +4195,13 @@ export function ComponentAtlas({
               role='listbox'
               aria-label='Matching projects'
             >
-              <strong>
-                {projectQuery.trim() ? "Matching projects" : "Recent projects"}
-              </strong>
+              <strong>{projectQuery.trim() ? "Command results" : "Quick actions"}</strong>
+              <div className='command-quick-actions'>
+                <button onClick={() => { setMenu(null); setModal("import"); }}><Upload aria-hidden='true' /><span><b>Import project</b><small>Folder, code, or GitHub</small></span></button>
+                <button onClick={() => { setDiagnosticQuery(""); setDiagnosticSeverity("all"); setMenu(null); setModal("diagnostics"); }} disabled={!activeAnalysisProject}><Activity aria-hidden='true' /><span><b>Project health</b><small>{projectDiagnostics.length} diagnostics</small></span></button>
+                <button onClick={() => { setMenu(null); setModal("shortcuts"); }}><Code2 aria-hidden='true' /><span><b>Keyboard shortcuts</b><small>View navigation help</small></span></button>
+              </div>
+              {projectSearchResults.length > 0 && <strong>Projects</strong>}
               {projectSearchResults.length ? (
                 projectSearchResults.map((project) => (
                   <button
@@ -4368,7 +4229,7 @@ export function ComponentAtlas({
                     <small>{project.files.length} source files</small>
                   </button>
                 ))
-              ) : (
+              ) : !commandFileResults.length && !commandNodeResults.length ? (
                 <div className='project-search-empty'>
                   <Search aria-hidden='true' />
                   <b>{projects.length ? "No matching projects" : "No saved projects"}</b>
@@ -4379,34 +4240,32 @@ export function ComponentAtlas({
                     <button onClick={() => { setMenu(null); setModal("import"); }}>Import project</button>
                   )}
                 </div>
-              )}
+              ) : null}
+              {commandFileResults.length > 0 && <><strong>Files</strong>{commandFileResults.map((file) => <button key={`command-file-${file}`} onClick={() => { void openProjectFile(file); setProjectQuery(""); setMenu(null); }}><span><i><Code2 aria-hidden='true' /></i><b>{file.split("/").at(-1)}</b></span><small>{file}</small></button>)}</>}
+              {commandNodeResults.length > 0 && <><strong>Graph nodes</strong>{commandNodeResults.map((node) => <button key={`command-node-${node.id}`} onClick={() => { selectNode(node.id); setProjectQuery(""); setMenu(null); }}><span><i>{nodeKindIcon(node.kind)}</i><b>{node.name}</b></span><small>{node.kind}</small></button>)}</>}
             </div>
           )}
         </div>
-        <div className='menu-wrap workspace-menu-wrap'>
-          <button className={`workspace-menu-trigger ${menu === "workspaceTools" ? "active" : ""}`} aria-haspopup='menu' aria-expanded={menu === "workspaceTools"} onClick={(event) => { event.stopPropagation(); setMenu(menu === "workspaceTools" ? null : "workspaceTools"); }}><Settings aria-hidden='true' /><span>Workspace</span><ChevronDown aria-hidden='true' /></button>
-          {menu === "workspaceTools" && <div className='popover workspace-tools-menu' role='menu' onClick={(event) => event.stopPropagation()}><header><b>Workspace</b><small>Navigation and preferences</small></header>{activeAnalysisProject && <div className='workspace-menu-project'><span><Atom aria-hidden='true' /></span><div><b>{activeFramework}</b><small>{activeAnalysisProject.name}</small></div></div>}{activeAnalysisProject && activeSyncState && <button className={`workspace-menu-sync sync-${activeSyncState.status}`} onClick={() => (activeSyncState.status === "error" || activeSyncState.status === "local-only") && void syncProjectToCloud(activeAnalysisProject)}>{activeSyncState.status === "syncing" ? <RefreshCw aria-hidden='true' /> : activeSyncState.status === "synced" ? <Cloud aria-hidden='true' /> : <CloudOff aria-hidden='true' />}<span><b>{activeSyncState.status === "synced" ? "Cloud synced" : activeSyncState.status === "syncing" ? "Syncing…" : activeSyncState.status === "error" ? "Retry cloud sync" : "Stored on this device"}</b><small>{sourceTypeLabel(activeAnalysisProject)} project</small></span></button>}<div className='workspace-menu-actions'><button onClick={() => window.location.assign("/")}><Home aria-hidden='true' /><span><b>Back to home</b><small>Open the landing page</small></span></button><button onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? <Sun aria-hidden='true' /> : <Moon aria-hidden='true' />}<span><b>{theme === "dark" ? "Light theme" : "Dark theme"}</b><small>Change workspace appearance</small></span></button><button onClick={() => { setMenu(null); setModal("settings"); }}><Settings aria-hidden='true' /><span><b>Preferences</b><small>Minimap and interface settings</small></span></button></div></div>}
-        </div>
         <button
-          className='icon-button'
-          aria-label='Toggle theme'
-          title='Toggle theme'
+          className='dashboard-home'
+          aria-label='Back to home'
+          title='Back to the Component Atlas landing page'
+          onClick={() => window.location.assign("/")}
+        >
+          <Home aria-hidden='true' />
+        </button>
+        <button
+          className='workspace-theme-toggle'
+          aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+          title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
           onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
         >
-          {theme === "dark" ? (
-            <Sun aria-hidden='true' />
-          ) : (
-            <Moon aria-hidden='true' />
-          )}
+          {theme === "dark" ? <Sun aria-hidden='true' /> : <Moon aria-hidden='true' />}
         </button>
-        <button
-          className='icon-button'
-          aria-label='Open settings'
-          title='Settings'
-          onClick={() => setModal("settings")}
-        >
-          <Settings aria-hidden='true' />
-        </button>
+        <div className='menu-wrap workspace-menu-wrap'>
+          <button className={`workspace-menu-trigger ${menu === "workspaceTools" ? "active" : ""}`} aria-haspopup='menu' aria-expanded={menu === "workspaceTools"} onClick={(event) => { event.stopPropagation(); setMenu(menu === "workspaceTools" ? null : "workspaceTools"); }}><Settings aria-hidden='true' /><span>Workspace</span><ChevronDown aria-hidden='true' /></button>
+          {menu === "workspaceTools" && <div className='popover workspace-tools-menu' role='menu' onClick={(event) => event.stopPropagation()}><header><b>Workspace</b><small>Project status and preferences</small></header>{activeAnalysisProject && <div className='workspace-menu-project'><span><Atom aria-hidden='true' /></span><div><b>{activeFramework}</b><small>{activeAnalysisProject.name}</small></div></div>}{activeAnalysisProject && activeSyncState && <button className={`workspace-menu-sync sync-${activeSyncState.status}`} onClick={() => (activeSyncState.status === "error" || activeSyncState.status === "local-only") && void syncProjectToCloud(activeAnalysisProject)}>{activeSyncState.status === "syncing" ? <RefreshCw aria-hidden='true' /> : activeSyncState.status === "synced" ? <Cloud aria-hidden='true' /> : <CloudOff aria-hidden='true' />}<span><b>{activeSyncState.status === "synced" ? "Cloud synced" : activeSyncState.status === "syncing" ? "Syncing…" : activeSyncState.status === "error" ? "Retry cloud sync" : "Stored on this device"}</b><small>{sourceTypeLabel(activeAnalysisProject)} project</small></span></button>}<div className='workspace-menu-actions'><button onClick={() => { setMenu(null); setModal("settings"); }}><Settings aria-hidden='true' /><span><b>Preferences</b><small>Minimap and interface settings</small></span></button></div></div>}
+        </div>
         {authLoading ? (
           <span className='avatar'>…</span>
         ) : authUser ? (
@@ -4447,218 +4306,81 @@ export function ComponentAtlas({
       <section
         className='studio'
         style={{
-          gridTemplateColumns: `${explorerCollapsed ? 48 : explorerWidth}px minmax(620px, 1fr) ${inspectorCollapsed ? 48 : inspectorWidth}px`,
-        }}
+          "--explorer-column": `${explorerCollapsed ? 48 : explorerWidth}px`,
+          "--inspector-column": `${inspectorCollapsed ? 48 : inspectorWidth}px`,
+        } as CSSProperties}
       >
-        <aside
-          className={`explorer ${explorerCollapsed ? "panel-collapsed" : ""}`}
-        >
-          <div className='section-label'>
-            <span className='panel-title'>PROJECT EXPLORER</span>
-            <button
-              className='panel-toggle'
-              type='button'
-              aria-label={
-                explorerCollapsed
-                  ? "Expand project explorer"
-                  : "Collapse project explorer"
-              }
-              title={
-                explorerCollapsed
-                  ? "Expand project explorer"
-                  : "Collapse project explorer"
-              }
-              aria-expanded={!explorerCollapsed}
-              onClick={() => setExplorerCollapsed((current) => !current)}
-            >
-              {explorerCollapsed ? (
-                <PanelRight aria-hidden='true' />
-              ) : (
-                <PanelLeft aria-hidden='true' />
-              )}
-            </button>
-          </div>
-          <button
-            className='import-button'
-            title='Import project (Command I on Mac, Control I on Windows/Linux)'
-            onClick={() => fileInputRef.current?.click()}
-          >
-            <Upload aria-hidden='true' />
-            <b>Import project</b>
-            <span>⌘ I / Ctrl I</span>
-          </button>
-          <input
-            ref={fileInputRef}
-            className='hidden-input'
-            type='file'
-            multiple
-            onChange={handleFiles}
-            {...({ webkitdirectory: "" } as { webkitdirectory: string })}
-          />
-          <input
-            ref={reconnectInputRef}
-            className='hidden-input'
-            type='file'
-            multiple
-            onChange={reconnectLocalFolder}
-            {...({ webkitdirectory: "" } as { webkitdirectory: string })}
-          />
-          <div className='import-options'>
-            <button onClick={() => fileInputRef.current?.click()}>
-              <FolderOpen aria-hidden='true' />
-              <small>Upload folder</small>
-            </button>
-            <button onClick={() => openPasteDialog("current")}>
-              <Code2 aria-hidden='true' />
-              <small>Paste code</small>
-            </button>
-            <button onClick={() => setModal("github")}>
-              <GitFork aria-hidden='true' />
-              <small>GitHub</small>
-            </button>
-          </div>
-          <div className='support-notice'>
-            <b>React · Next.js · Remix · Solid · Lightning · Vue</b>
-            <span>JavaScript/TypeScript, styles, data and small assets</span>
-          </div>
-          <label
-            className='file-search'
-            title='Focus file search (Option F on Mac, Alt F on Windows/Linux)'
-          >
-            <Search aria-hidden='true' />
-            <input
-              ref={fileSearchRef}
-              value={fileQuery}
-              onChange={(event) => setFileQuery(event.target.value)}
-              placeholder='Search files…'
-            />
-            <kbd>⌥ F / Alt F</kbd>
-          </label>
-          <div
-            className='file-view-selector menu-wrap'
-            onClick={(event) => event.stopPropagation()}
-          >
-            <button
-              className={menu === "fileView" ? "active" : ""}
-              aria-haspopup='menu'
-              aria-expanded={menu === "fileView"}
-              onClick={() => setMenu(menu === "fileView" ? null : "fileView")}
-            >
-              <span>
-                {fileTabIcon(fileTab)}
-                <b>{fileTab}</b>
-              </span>
-              <em>{fileTabCounts[fileTab]}</em>
-              <ChevronDown aria-hidden='true' />
-            </button>
-            {menu === "fileView" && (
-              <div
-                className='popover file-view-menu'
-                role='menu'
-                aria-label='Choose project file category'
-              >
-                {FILE_TABS.map((tab) => (
-                  <button
-                    className={fileTab === tab ? "selected" : ""}
-                    role='menuitemradio'
-                    aria-checked={fileTab === tab}
-                    key={tab}
-                    onClick={() => {
-                      setFileTab(tab);
-                      setMenu(null);
-                    }}
-                  >
-                    <span>
-                      {fileTabIcon(tab)}
-                      <b>{tab}</b>
-                    </span>
-                    <small>{fileTabCounts[tab]}</small>
-                    {fileTab === tab ? <Check aria-hidden='true' /> : null}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-          <div
-            className='file-tree'
-            aria-label='Project files'
-            onKeyDown={(event) => {
-              if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
-              const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>(".directory-row, .file-row"));
-              if (!buttons.length) return;
-              const current = (event.target as Element).closest<HTMLButtonElement>("button");
-              const index = Math.max(0, buttons.indexOf(current ?? buttons[0]));
-              const nextIndex = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : event.key === "ArrowDown" ? Math.min(buttons.length - 1, index + 1) : Math.max(0, index - 1);
-              event.preventDefault();
-              buttons[nextIndex]?.focus();
-            }}
-          >
-            <div className='folder'>
-              <ChevronDown aria-hidden='true' />
-              <FolderOpen aria-hidden='true' />
-              <b>Project</b>
-              <span>{filteredFiles.length}</span>
-            </div>
-            {fileTreeRows}
-            {!filteredFiles.length && (
-              <div className='empty-state explorer-empty-state'>
-                <Search aria-hidden='true' />
-                <b>No matching files</b>
-                <span>Try another filename or change the file category.</span>
-                {fileQuery && <button onClick={() => setFileQuery("")}>Clear search</button>}
-              </div>
-            )}
-          </div>
-          <div className='explorer-footer'>
-            <i /> {projectFiles.length} files available{" "}
-            <button
-              aria-label='Explorer options'
-              onClick={() => notify("Explorer is up to date")}
-            >
-              <Ellipsis aria-hidden='true' />
-            </button>
-          </div>
-          <div
-            className='resize-handle resize-right'
-            role='separator'
-            tabIndex={0}
-            aria-label='Resize project explorer'
-            aria-orientation='vertical'
-            aria-valuemin={250}
-            aria-valuemax={460}
-            aria-valuenow={explorerWidth}
-            onKeyDown={(event) => {
-              if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-              event.preventDefault();
-              setExplorerWidth((current) => Math.min(460, Math.max(250, current + (event.key === "ArrowRight" ? 10 : -10))));
-            }}
-            onPointerDown={(event) => beginResize("explorer", event)}
-          />
-        </aside>
+        <ProjectExplorer
+          projectFiles={projectFiles}
+          filteredFiles={filteredFiles}
+          projectDetails={projectDetails}
+          fileTabCounts={fileTabCounts}
+          fileInputRef={fileInputRef}
+          reconnectInputRef={reconnectInputRef}
+          fileSearchRef={fileSearchRef}
+          onFilesChange={handleFiles}
+          onReconnectChange={reconnectLocalFolder}
+          onOpenFile={openProjectFile}
+          onResizeStart={handleExplorerResize}
+          notify={notify}
+        />
 
         <section
           className='canvas-column'
           ref={canvasColumnRef}
-          style={{ gridTemplateRows: `56px minmax(0, 1fr) ${codeHeight}px` }}
+          style={{ gridTemplateRows: `${selected ? 94 : 56}px minmax(0, 1fr) ${codeHeight}px` }}
         >
+          <div className={`canvas-header-stack ${selected ? "has-context" : ""}`}>
           <div className='canvas-toolbar'>
             <button
               className={graphMode === "graph" ? "active" : ""}
               onClick={() => setGraphMode("graph")}
             >
-              <Network aria-hidden='true' /> Component graph
+              <Network aria-hidden='true' /> <span className='canvas-mode-label'>Component graph</span>
             </button>
             <button
               className={graphMode === "flow" ? "active" : ""}
               onClick={() => setGraphMode("flow")}
             >
-              <Workflow aria-hidden='true' /> Execution flow
+              <Workflow aria-hidden='true' /> <span className='canvas-mode-label'>Execution flow</span>
             </button>
             <small>
-              {graphLayout.nodes.length} nodes · {visibleEdges.length} direct
-              relationships
+              {graphLayout.nodes.length} nodes · {visibleEdges.length} relationships
             </small>
-            <span />
+            <span className='canvas-toolbar-spacer' />
+            <button
+              className='canvas-search-trigger'
+              title='Find a component or file in this graph'
+              onClick={(event) => {
+                event.stopPropagation();
+                setMenu("more");
+                window.requestAnimationFrame(() => nodeSearchRef.current?.focus());
+              }}
+            >
+              <Search aria-hidden='true' /> <span>Find node</span>
+            </button>
+            <div className={`graph-legend graph-legend-top ${showGraphLegend ? "expanded" : "collapsed"}`}>
+              <button
+                aria-expanded={showGraphLegend}
+                aria-label={`${showGraphLegend ? "Hide" : "Show"} graph relationship legend`}
+                onClick={() => setShowGraphLegend((current) => !current)}
+              >
+                <Network aria-hidden='true' />
+                <span>Legend</span>
+                <ChevronDown aria-hidden='true' />
+              </button>
+              {showGraphLegend && (
+                <div>
+                  <span className='legend-import'>━ Import</span>
+                  <span className='legend-render'>━ Render</span>
+                  <span className='legend-data'>━ Data</span>
+                  <span className='legend-callback'>┄ Callback</span>
+                  <span className='legend-api'>━ API</span>
+                  <span className='legend-route'>┄ Route</span>
+                  <span className='legend-direction'>→ Direction</span>
+                </div>
+              )}
+            </div>
             <div className='menu-wrap'>
               <button
                 className={`canvas-tools-trigger ${menu === "more" ? "active" : ""}`}
@@ -4669,24 +4391,64 @@ export function ComponentAtlas({
                   setMenu(menu === "more" ? null : "more");
                 }}
               >
-                <Settings aria-hidden='true' /> Canvas tools {canvasCustomizationCount > 0 && <em>{canvasCustomizationCount}</em>} <ChevronDown aria-hidden='true' />
+                <Settings aria-hidden='true' /> <span className='canvas-tools-label'>Canvas tools</span><span className='canvas-tools-short'>Tools</span> {canvasCustomizationCount > 0 && <em>{canvasCustomizationCount}</em>} <ChevronDown aria-hidden='true' />
               </button>
               {menu === "more" && (
                 <div className='popover canvas-tools-popover' onClick={(event) => event.stopPropagation()}>
                   <header><div><b>Canvas tools</b><small>Search, organize and inspect the graph</small></div><button aria-label='Close canvas tools' onClick={() => setMenu(null)}>×</button></header>
                   <label className='canvas-node-search'><Search aria-hidden='true' /><input ref={nodeSearchRef} value={nodeQuery} onChange={(event) => findNode(event.target.value)} placeholder='Find a node or file…' /></label>
-                  <div className='canvas-active-summary'><div><span>{graphScope === "focused" ? "Focused file" : "Whole project"}</span><span>Grouped by {graphGrouping === "kind" ? "type" : "folder"}</span>{Object.values(enabledKinds).some((enabled) => !enabled) && <span>{Object.values(enabledKinds).filter(Boolean).length}/5 node types</span>}{Object.values(enabledEdgeKinds).some((enabled) => !enabled) && <span>{Object.values(enabledEdgeKinds).filter(Boolean).length}/6 relationships</span>}</div><button disabled={canvasCustomizationCount === 0} onClick={() => { setGraphScope("focused"); setGraphGrouping("kind"); setCollapsedGraphGroups(new Set()); setEnabledKinds({ Page: true, Component: true, Hook: true, Service: true, Utility: true }); setEnabledEdgeKinds({ import: true, render: true, data: true, callback: true, api: true, route: true }); setShowMinimap(true); }}>Reset</button></div>
+                  {nodeQuery && <div className='canvas-node-results'>{nodeSearchMatches.length ? nodeSearchMatches.map((node) => <button key={`node-search-${node.id}`} onClick={() => { focusGraphNode(node.id); setMenu(null); }}><span className={`node-icon ${node.tone}`}>{nodeKindIcon(node.kind)}</span><span><b>{node.name}</b><small>{node.file}</small></span><ChevronRight aria-hidden='true' /></button>) : <p>No matching graph nodes</p>}</div>}
+                  <div className='canvas-active-summary'><div><span>{graphScope === "focused" ? `${graphDepth === 1 ? "Direct" : "2-level"} focus` : "Whole project"}</span><span>{graphLayoutStrategy === "auto" ? "Automatic layers" : `Grouped by ${graphGrouping === "kind" ? "type" : "folder"}`}</span><span>{graphSpacing} spacing</span>{Object.values(enabledKinds).some((enabled) => !enabled) && <span>{Object.values(enabledKinds).filter(Boolean).length}/5 node types</span>}{Object.values(enabledEdgeKinds).some((enabled) => !enabled) && <span>{Object.values(enabledEdgeKinds).filter(Boolean).length}/6 relationships</span>}{!showEdgeDirections && <span>Directions hidden</span>}</div><button disabled={canvasCustomizationCount === 0} onClick={() => { setGraphScope("focused"); setGraphDepth(1); setGraphGrouping("kind"); setGraphLayoutStrategy("auto"); setGraphSpacing("comfortable"); setCollapsedGraphGroups(new Set()); setEnabledKinds({ Page: true, Component: true, Hook: true, Service: true, Utility: true }); setEnabledEdgeKinds({ import: true, render: true, data: true, callback: true, api: true, route: true }); setShowEdgeDirections(true); setShowMinimap(true); }}>Reset</button></div>
                   <section><b>Relationship scope</b><div className='canvas-option-switch'><button className={graphScope === "focused" ? "active" : ""} onClick={() => setGraphScope("focused")}>Focused file</button><button className={graphScope === "overview" ? "active" : ""} onClick={() => setGraphScope("overview")}>Whole project</button></div></section>
-                  <section><b>Group nodes by</b><div className='canvas-option-switch'><button className={graphGrouping === "kind" ? "active" : ""} onClick={() => { setGraphGrouping("kind"); setCollapsedGraphGroups(new Set()); }}>Type</button><button className={graphGrouping === "folder" ? "active" : ""} onClick={() => { setGraphGrouping("folder"); setCollapsedGraphGroups(new Set()); }}>Folder</button></div></section>
+                  <section><b>Focus depth</b><div className='canvas-option-switch canvas-depth-switch'><button className={graphDepth === 1 ? "active" : ""} onClick={() => { setGraphScope("focused"); setGraphDepth(1); }}>Direct</button><button className={graphDepth === 2 ? "active" : ""} onClick={() => { setGraphScope("focused"); setGraphDepth(2); }}>2 levels</button><button className={graphDepth === "all" ? "active" : ""} onClick={() => setGraphDepth("all")}>All</button></div></section>
+                  <section><b>Graph layout</b><div className='canvas-option-switch'><button className={graphLayoutStrategy === "auto" ? "active" : ""} onClick={() => { setGraphLayoutStrategy("auto"); setCollapsedGraphGroups(new Set()); }}>Automatic layers</button><button className={graphLayoutStrategy === "grouped" ? "active" : ""} onClick={() => { setGraphLayoutStrategy("grouped"); setCollapsedGraphGroups(new Set()); }}>Grouped clusters</button></div></section>
+                  {graphLayoutStrategy === "grouped" && <section><b>Group nodes by</b><div className='canvas-option-switch'><button className={graphGrouping === "kind" ? "active" : ""} onClick={() => { setGraphGrouping("kind"); setCollapsedGraphGroups(new Set()); }}>Type</button><button className={graphGrouping === "folder" ? "active" : ""} onClick={() => { setGraphGrouping("folder"); setCollapsedGraphGroups(new Set()); }}>Folder</button></div></section>}
+                  <section><b>Node spacing</b><div className='canvas-option-switch canvas-spacing-switch'><button className={graphSpacing === "compact" ? "active" : ""} onClick={() => setGraphSpacing("compact")}>Compact</button><button className={graphSpacing === "comfortable" ? "active" : ""} onClick={() => setGraphSpacing("comfortable")}>Comfortable</button><button className={graphSpacing === "expanded" ? "active" : ""} onClick={() => setGraphSpacing("expanded")}>Expanded</button></div></section>
                   <section><b>Node types</b><div className='canvas-tool-checks'>{(Object.keys(enabledKinds) as NodeKind[]).map((kind) => <label key={kind}><input type='checkbox' checked={enabledKinds[kind]} onChange={() => setEnabledKinds((current) => ({ ...current, [kind]: !current[kind] }))} />{nodeKindIcon(kind)}<span>{kind}</span></label>)}</div></section>
-                  <section><b>Relationships</b><div className='canvas-tool-checks relationship-checks'>{(Object.keys(enabledEdgeKinds) as Array<NonNullable<GraphEdge["kind"]>>).map((kind) => <label key={kind}><input type='checkbox' checked={enabledEdgeKinds[kind]} onChange={() => setEnabledEdgeKinds((current) => ({ ...current, [kind]: !current[kind] }))} /><i className={`relationship-dot edge-${kind}`} /><span>{kind}</span></label>)}</div></section>
-                  <div className='canvas-tool-actions'><button className={projectDiagnostics.length ? "has-issues" : ""} onClick={() => { setMenu(null); setModal("diagnostics"); }}><Activity aria-hidden='true' /> Project health <em>{projectDiagnostics.length}</em></button><button disabled={!activeAnalysisProject?.previousAnalysis} onClick={() => { setMenu(null); setModal("comparison"); }}><RefreshCw aria-hidden='true' /> Compare analysis</button><button disabled={!activeAnalysisProject} onClick={exportAnalysisReport}><Download aria-hidden='true' /> Export analysis</button><button onClick={() => setShowMinimap(!showMinimap)}><Network aria-hidden='true' /> {showMinimap ? "Hide" : "Show"} minimap</button><button onClick={() => { setZoom(1); setGraphPan({ x: 0, y: 0 }); if (projectNodes[0]) setSelected(projectNodes[0].id); setMenu(null); notify("Graph position and zoom reset"); }}><RotateCcw aria-hidden='true' /> Reset graph view</button></div>
+                  <section><b>Relationships</b><div className='canvas-tool-checks relationship-checks'>{(Object.keys(enabledEdgeKinds) as Array<NonNullable<GraphEdge["kind"]>>).map((kind) => <label key={kind}><input type='checkbox' checked={enabledEdgeKinds[kind]} onChange={() => setEnabledEdgeKinds((current) => ({ ...current, [kind]: !current[kind] }))} /><i className={`relationship-dot edge-${kind}`} /><span>{kind}</span></label>)}</div><label className='canvas-direction-toggle'><input type='checkbox' checked={showEdgeDirections} onChange={(event) => setShowEdgeDirections(event.target.checked)} /><span><b>Show directions</b><small>Arrowheads and animated selected flow</small></span></label></section>
+                  <div className='canvas-tool-actions'><button className={projectDiagnostics.length ? "has-issues" : ""} onClick={() => { setDiagnosticQuery(""); setDiagnosticSeverity("all"); setMenu(null); setModal("diagnostics"); }}><Activity aria-hidden='true' /> Project health <em>{projectDiagnostics.length}</em></button><button disabled={!activeAnalysisProject?.previousAnalysis} onClick={() => { setMenu(null); setModal("comparison"); }}><RefreshCw aria-hidden='true' /> Compare analysis</button><button disabled={!activeAnalysisProject} onClick={exportAnalysisReport}><Download aria-hidden='true' /> Export analysis</button><button onClick={() => setShowMinimap(!showMinimap)}><Network aria-hidden='true' /> {showMinimap ? "Hide" : "Show"} minimap</button><button onClick={() => { setZoom(1); setGraphPan({ x: 0, y: 0 }); if (projectNodes[0]) setSelected(projectNodes[0].id); setMenu(null); notify("Graph position and zoom reset"); }}><RotateCcw aria-hidden='true' /> Reset graph view</button></div>
                 </div>
               )}
             </div>
           </div>
+          {selected && (
+            <nav className='graph-context-bar' aria-label='Graph navigation history'>
+              <div className='graph-history-controls'>
+                <button aria-label='Previous graph selection' title='Previous selection' disabled={selectionHistoryIndex <= 0} onClick={() => navigateSelectionHistory(-1)}><ArrowLeft aria-hidden='true' /></button>
+                <button aria-label='Next graph selection' title='Next selection' disabled={selectionHistoryIndex < 0 || selectionHistoryIndex >= selectionHistory.length - 1} onClick={() => navigateSelectionHistory(1)}><ArrowRight aria-hidden='true' /></button>
+              </div>
+              <div className='graph-focus-summary'>
+                <span>Focused on</span>
+                <b>{selectedName}</b>
+                <small>{graphScope === "overview" || graphDepth === "all" ? "Whole project" : graphDepth === 1 ? "Direct relationships" : "Two relationship levels"}</small>
+              </div>
+              <div className='graph-relative-controls'>
+                <button disabled={!selectedRelationships.some((edge) => edge.direction === "incoming")} onClick={() => { const edge = selectedRelationships.find((item) => item.direction === "incoming"); if (edge?.peer) selectNode(edge.peer.id); }}><span>Show parent</span></button>
+                <button disabled={!selectedRelationships.some((edge) => edge.direction === "outgoing")} onClick={() => { const edge = selectedRelationships.find((item) => item.direction === "outgoing"); if (edge?.peer) selectNode(edge.peer.id); }}><span>Show child</span></button>
+              </div>
+              <small>{selectedRelationships.length} direct relationship{selectedRelationships.length === 1 ? "" : "s"}</small>
+              <button
+                className={`show-all-graph-button ${graphScope === "overview" || graphDepth === "all" ? "overview-active" : ""}`}
+                aria-pressed={graphScope === "overview" || graphDepth === "all"}
+                onClick={() => {
+                  if (graphScope === "overview" || graphDepth === "all") {
+                    setGraphScope("focused");
+                    setGraphDepth(1);
+                  } else {
+                    setGraphScope("overview");
+                    setGraphDepth("all");
+                  }
+                }}
+              >
+                <Network aria-hidden='true' />
+                <span>{graphScope === "overview" || graphDepth === "all" ? "Focus selection" : "Show all"}</span>
+              </button>
+              <button className='focus-canvas-button' onClick={() => { const focused = explorerCollapsed && inspectorCollapsed; setExplorerCollapsed(focused ? false : true); setInspectorCollapsed(focused ? false : true); }}><Maximize2 aria-hidden='true' /><span>{explorerCollapsed && inspectorCollapsed ? "Restore panels" : "Focus canvas"}</span></button>
+            </nav>
+          )}
+          </div>
           <div
-            className={`graph-canvas ${graphMode === "flow" ? "flow-mode" : ""} ${graphScope === "focused" && focusedNodeId ? "focused-graph" : ""}`}
+            className={`graph-canvas ${graphMode === "flow" ? "flow-mode" : ""} ${graphScope === "focused" && focusedNodeId ? "focused-graph" : ""} ${graphScope === "focused" && selected ? "selected-context" : ""} ${showEdgeDirections ? "" : "hide-edge-directions"}`}
           >
             <div className='graph-grid' />
             {!projectNodes.length && (
@@ -4707,6 +4469,13 @@ export function ComponentAtlas({
                   {activeAnalysisProject ? <RefreshCw className={reanalyzingProjectId === activeAnalysisProject.id ? "spin" : ""} aria-hidden='true' /> : <Upload aria-hidden='true' />}
                   {activeAnalysisProject ? "Analyze again" : "Import project"}
                 </button>
+                {!activeAnalysisProject && <small className='workspace-empty-support'>React · Next.js · SolidJS · LightningJS · Vue</small>}
+              </div>
+            )}
+            {graphLayoutPending && projectNodes.length > 0 && (
+              <div className='graph-layout-status' role='status' aria-live='polite'>
+                <span />
+                <div><b>Arranging graph</b><small>Optimizing layers and connection paths…</small></div>
               </div>
             )}
             <div
@@ -4727,36 +4496,51 @@ export function ComponentAtlas({
                   transform: `translate(${graphPan.x}px, ${graphPan.y}px) scale(${zoom})`,
                 }}
               >
-                {graphLayout.groups.map((group) => <button className='graph-group-header' key={`group-${group.name}`} style={{ left: group.x, top: 24 }} onClick={(event) => { event.stopPropagation(); setCollapsedGraphGroups((current) => { const next = new Set(current); if (next.has(group.name)) next.delete(group.name); else next.add(group.name); return next; }); }} title={`${group.collapsed ? "Expand" : "Collapse"} ${group.name}`}><span>{group.collapsed ? <ChevronRight aria-hidden='true' /> : <ChevronDown aria-hidden='true' />}</span><b>{group.name}</b><small>{group.count}</small></button>)}
-                {visibleEdges.map((edge) => (
-                  <div
-                    className={`dynamic-edge edge-${edge.kind ?? "import"} ${edge.dashed ? "dashed" : ""} ${selected && (edge.from === selected || edge.to === selected) ? "selected-path" : ""} ${selected && edge.from !== selected && edge.to !== selected ? "muted-path" : ""}`}
-                    data-label={edge.label ?? edge.kind ?? "Import"}
-                    key={`${edge.from}-${edge.to}`}
-                    style={{
-                      left: edge.x,
-                      top: edge.y,
-                      width: edge.width,
-                      transform: `rotate(${edge.angle}deg)`,
-                    }}
-                  >
-                    <span
-                      className='dynamic-edge-label'
-                      style={{ transform: `translate(-50%, -50%) rotate(${-edge.angle}deg)` }}
-                    >
-                      {edge.label ?? edge.kind ?? "Import"}
-                    </span>
-                  </div>
-                ))}
-                {graphLayout.nodes.map((node) => (
+                {graphLayout.groups.map((group) => <button className='graph-group-header' key={`group-${group.name}`} style={{ left: group.x, top: 24 }} aria-expanded={!group.collapsed} aria-label={`${group.collapsed ? "Expand" : "Collapse"} ${group.name} cluster with ${group.count} nodes and ${group.relationships} relationships`} onClick={(event) => { event.stopPropagation(); setCollapsedGraphGroups((current) => { const next = new Set(current); if (next.has(group.name)) next.delete(group.name); else next.add(group.name); return next; }); }} title={`${group.collapsed ? "Expand" : "Collapse"} ${group.name}`}><span>{group.collapsed ? <ChevronRight aria-hidden='true' /> : <ChevronDown aria-hidden='true' />}</span><b>{group.name}</b><small>{group.count} nodes · {group.relationships} links</small></button>)}
+                <svg className='graph-edge-layer' width={graphLayout.width} height={graphLayout.height} aria-hidden='true'>
+                  <defs>
+                    {(["import", "render", "data", "callback", "api", "route"] as const).map((kind) => (
+                      <marker id={`graph-arrow-${kind}`} key={kind} markerWidth='13' markerHeight='13' refX='11' refY='6.5' orient='auto' markerUnits='userSpaceOnUse'>
+                        <path className={`graph-edge-marker edge-${kind}`} d='M 0 0 L 13 6.5 L 0 13 z' />
+                      </marker>
+                    ))}
+                  </defs>
+                  {renderedGraphEdges.map((edge, index) => {
+                    const kind = edge.kind ?? "import";
+                    const selectedPath = Boolean(selected && (edge.from === selected || edge.to === selected));
+                    const hoveredPath = Boolean(hoveredGraphNode && (edge.from === hoveredGraphNode || edge.to === hoveredGraphNode));
+                    return (
+                      <g
+                        className={`graph-svg-edge edge-${kind} ${edge.dashed ? "dashed" : ""} ${selectedPath ? "selected-path" : ""} ${hoveredPath ? "hovered-path" : ""} ${selected && edge.from !== selected && edge.to !== selected ? "muted-path" : ""}`}
+                        key={`${edge.from}-${edge.to}-${index}`}
+                      >
+                        <path className='graph-edge-hit' d={edge.path} />
+                        <path className='graph-edge-path' d={edge.path} markerEnd={showEdgeDirections ? `url(#graph-arrow-${kind})` : undefined} />
+                        {showEdgeDirections && <circle className='graph-edge-source' cx={edge.x} cy={edge.y} r='4' />}
+                        <path className='graph-edge-flow-path' d={edge.path} />
+                        {(selectedPath || hoveredPath || graphMode === "flow") && (
+                          <foreignObject className='graph-edge-label-wrap' x={edge.labelX - 76} y={edge.labelY - 14} width='152' height='28'>
+                            <span className='graph-edge-label'>{edge.label ?? kind}</span>
+                          </foreignObject>
+                        )}
+                      </g>
+                    );
+                  })}
+                </svg>
+                {renderedGraphNodes.map((node) => (
                   <button
                     key={node.id}
+                    data-graph-node={node.id}
                     onClick={() => selectNode(node.id)}
+                    onKeyDown={(event) => navigateGraphWithKeyboard(event, node.id)}
+                    onMouseEnter={() => setHoveredGraphNode(node.id)}
+                    onMouseLeave={() => setHoveredGraphNode("")}
+                    aria-label={`${node.name}, ${node.kind}, ${node.meta}. Use arrow keys to move between graph nodes.`}
                     style={{
                       left: graphLayout.positions[node.id].x,
                       top: graphLayout.positions[node.id].y,
                     }}
-                      className={`graph-node node-kind-${node.kind.toLowerCase()} ${selected === node.id ? "selected" : ""} ${graphScope === "focused" && focusedNodeId && !connectedNodeIds.has(node.id) ? "unrelated" : ""} ${(projectDetails[node.id]?.insights?.diagnostics?.length ?? 0) > 0 ? "has-analysis-issues" : ""}`}
+                      className={`graph-node node-kind-${node.kind.toLowerCase()} ${selected === node.id ? "selected" : ""} ${(selected || focusedNodeId) && !connectedNodeIds.has(node.id) ? "unrelated" : ""} ${(projectDetails[node.id]?.insights?.diagnostics?.length ?? 0) > 0 ? "has-analysis-issues" : ""}`}
                   >
                     <span className={`node-icon ${node.tone}`}>
                       {nodeKindIcon(node.kind)}
@@ -4775,72 +4559,65 @@ export function ComponentAtlas({
                     )}
                   </button>
                 ))}
+                <p className='sr-only' aria-live='polite'>{selectedName ? `${selectedName} selected. ${selectedRelationships.length} direct relationships.` : "No graph node selected."}</p>
               </div>
             </div>
-            <div className='zoom-controls' aria-label='Canvas view controls'>
-              <span className='zoom-controls-label'>View</span>
+            <div className={`zoom-controls ${showViewControls ? "expanded" : "collapsed"}`} aria-label='Canvas view controls'>
               <button
-                aria-label='Zoom out'
-                title='Zoom out'
-                onClick={() =>
-                  setZoom((value) => Math.max(0.35, +(value - 0.1).toFixed(2)))
-                }
+                className='zoom-controls-toggle'
+                aria-expanded={showViewControls}
+                aria-label={`${showViewControls ? "Collapse" : "Expand"} canvas view controls`}
+                title={`${showViewControls ? "Collapse" : "Expand"} zoom, fit and reset controls`}
+                onClick={() => setShowViewControls((current) => !current)}
               >
-                <Minus aria-hidden='true' />
+                <span>View</span>
+                <ChevronRight aria-hidden='true' />
               </button>
-              <small aria-label={`Current zoom ${Math.round(zoom * 100)} percent`}>{Math.round(zoom * 100)}%</small>
-              <button
-                aria-label='Zoom in'
-                title='Zoom in'
-                onClick={() =>
-                  setZoom((value) => Math.min(2.5, +(value + 0.1).toFixed(2)))
-                }
-              >
-                <Plus aria-hidden='true' />
-              </button>
-              <button
-                className='fit-view'
-                aria-label='Fit graph to canvas'
-                title='Fit the entire graph inside the canvas'
-                onClick={() => {
-                  setZoom(graphLayout.width > 1200 ? 0.7 : 1);
-                  setGraphPan({ x: 0, y: 0 });
-                }}
-              >
-                <Maximize2 aria-hidden='true' /> Fit graph
-              </button>
-              <button
-                className='reset-view'
-                aria-label='Reset graph position and zoom'
-                title='Return the canvas to its original position'
-                onClick={() => {
-                  setZoom(1);
-                  setGraphPan({ x: 0, y: 0 });
-                  if (projectNodes[0]) setSelected(projectNodes[0].id);
-                  notify("Graph position and zoom reset");
-                }}
-              >
-                <RotateCcw aria-hidden='true' /> Reset view
-              </button>
-            </div>
-            <div className={`graph-legend ${showGraphLegend ? "expanded" : "collapsed"}`}>
-              <button
-                aria-expanded={showGraphLegend}
-                aria-label={`${showGraphLegend ? "Hide" : "Show"} graph relationship legend`}
-                onClick={() => setShowGraphLegend((current) => !current)}
-              >
-                <Network aria-hidden='true' />
-                <span>Relationships</span>
-                <ChevronDown aria-hidden='true' />
-              </button>
-              {showGraphLegend && (
-                <div>
-                  <span className='legend-import'>━ Import</span>
-                  <span className='legend-render'>━ Render</span>
-                  <span className='legend-data'>━ Data</span>
-                  <span className='legend-callback'>┄ Callback</span>
-                  <span className='legend-api'>━ API</span>
-                  <span className='legend-route'>┄ Route</span>
+              {showViewControls && (
+                <div className='zoom-controls-actions'>
+                  <button
+                    aria-label='Zoom out'
+                    title='Zoom out'
+                    onClick={() =>
+                      setZoom((value) => Math.max(0.35, +(value - 0.1).toFixed(2)))
+                    }
+                  >
+                    <Minus aria-hidden='true' />
+                  </button>
+                  <small aria-label={`Current zoom ${Math.round(zoom * 100)} percent`}>{Math.round(zoom * 100)}%</small>
+                  <button
+                    aria-label='Zoom in'
+                    title='Zoom in'
+                    onClick={() =>
+                      setZoom((value) => Math.min(2.5, +(value + 0.1).toFixed(2)))
+                    }
+                  >
+                    <Plus aria-hidden='true' />
+                  </button>
+                  <button
+                    className='fit-view'
+                    aria-label='Fit graph to canvas'
+                    title='Fit the entire graph inside the canvas'
+                    onClick={() => {
+                      setZoom(graphLayout.width > 1200 ? 0.7 : 1);
+                      setGraphPan({ x: 0, y: 0 });
+                    }}
+                  >
+                    <Maximize2 aria-hidden='true' /> Fit graph
+                  </button>
+                  <button
+                    className='reset-view'
+                    aria-label='Reset graph position and zoom'
+                    title='Return the canvas to its original position'
+                    onClick={() => {
+                      setZoom(1);
+                      setGraphPan({ x: 0, y: 0 });
+                      if (projectNodes[0]) setSelected(projectNodes[0].id);
+                      notify("Graph position and zoom reset");
+                    }}
+                  >
+                    <RotateCcw aria-hidden='true' /> Reset view
+                  </button>
                 </div>
               )}
             </div>
@@ -4916,44 +4693,45 @@ export function ComponentAtlas({
           onSelectNode={selectNode}
           onOpenFile={openProjectFile}
           onJumpToCode={jumpToCodeLocation}
+          onFocusLoadedCode={focusLoadedCodeLocation}
           notify={notify}
         />
       </section>
 
       {modal && (
-        <div
-          className='modal-backdrop'
-          role='presentation'
-          onMouseDown={() =>
-            modal === "duplicate"
-              ? dismissDuplicateProject()
-              : modal === "remove"
-                ? dismissProjectRemoval()
-                : modal !== "analysis" && setModal(null)
+        <DialogShell
+          label={DIALOG_LABELS[modal]}
+          size={
+            modal === "diagnostics" || modal === "comparison"
+              ? "review"
+              : modal === "import" || modal === "report" || modal === "analysis"
+                ? "large"
+                : modal === "remove" || modal === "rename"
+                  ? "small"
+                  : "medium"
+          }
+          tone={
+            modal === "remove"
+              ? "danger"
+              : modal === "unsupported"
+                ? "warning"
+                : modal === "duplicate"
+                  ? "info"
+                  : "default"
+          }
+          className={`${modal === "import" ? "import-modal" : ""} ${modal === "report" ? "report-modal" : ""} ${modal === "diagnostics" || modal === "comparison" ? "diagnostics-modal" : ""} ${modal === "duplicate" ? "duplicate-modal" : ""} ${modal === "remove" ? "remove-project-modal" : ""} ${modal === "analysis" ? "analysis-modal" : ""} ${modal === "settings" ? "settings-modal" : ""}`}
+          closeOnBackdrop={modal !== "analysis" && modal !== "remove"}
+          onClose={
+            modal === "analysis"
+              ? cancelProjectAnalysis
+              : modal === "duplicate"
+                ? dismissDuplicateProject
+                : modal === "remove"
+                  ? dismissProjectRemoval
+                  : () => setModal(null)
           }
         >
-          <section
-            className={`modal-card ${modal === "report" ? "report-modal" : ""} ${modal === "diagnostics" || modal === "comparison" ? "diagnostics-modal" : ""} ${modal === "duplicate" ? "duplicate-modal" : ""} ${modal === "remove" ? "remove-project-modal" : ""} ${modal === "analysis" ? "analysis-modal" : ""} ${modal === "settings" ? "settings-modal" : ""}`}
-            role='dialog'
-            aria-modal='true'
-            aria-label={`${modal} dialog`}
-            onMouseDown={(event) => event.stopPropagation()}
-          >
-            <button
-              className='modal-close'
-              aria-label='Close dialog'
-              onClick={
-                modal === "analysis"
-                  ? cancelProjectAnalysis
-                  : modal === "duplicate"
-                    ? dismissDuplicateProject
-                    : modal === "remove"
-                      ? dismissProjectRemoval
-                      : () => setModal(null)
-              }
-            >
-              ×
-            </button>
+            {importContent}
             {pasteContent}
             {modal === "github" && (
               <div className='github-import-dialog'>
@@ -5186,9 +4964,8 @@ export function ComponentAtlas({
                   </span>
                 </div>
                 <label className='delete-confirmation'>
-                  Type <b>{projectToRemove.name}</b> to confirm
+                  <span>Type <b>{projectToRemove.name}</b> to confirm</span>
                   <input
-                    autoFocus
                     value={deleteConfirmation}
                     onChange={(event) =>
                       setDeleteConfirmation(event.target.value)
@@ -5196,7 +4973,7 @@ export function ComponentAtlas({
                   />
                 </label>
                 <div className='remove-project-actions'>
-                  <button onClick={dismissProjectRemoval}>Keep project</button>
+                  <button autoFocus onClick={dismissProjectRemoval}>Keep project</button>
                   <button
                     disabled={deleteConfirmation !== projectToRemove.name}
                     onClick={confirmProjectRemoval}
@@ -5232,37 +5009,48 @@ export function ComponentAtlas({
                 <h2>Analysis diagnostics</h2>
                 <p>
                   {projectDiagnostics.length
-                    ? `${projectDiagnostics.length} item${projectDiagnostics.length === 1 ? "" : "s"} may need your attention. Select one to open its source.`
+                    ? `${projectDiagnostics.length} diagnostic${projectDiagnostics.length === 1 ? "" : "s"} across ${new Set(projectDiagnostics.map((issue) => issue.file)).size} file${new Set(projectDiagnostics.map((issue) => issue.file)).size === 1 ? "" : "s"}. Select an issue to open its exact source location.`
                     : "No parser, dependency, cycle, or unused-file issues were detected."}
                 </p>
+                <div className='diagnostics-actions'>
+                  <button onClick={copyDiagnosticsReport} disabled={!projectDiagnostics.length}><Copy aria-hidden='true' /> Copy report</button>
+                  <button onClick={exportAnalysisReport}><Download aria-hidden='true' /> Export full analysis</button>
+                </div>
                 {projectDiagnostics.length > 0 ? (
-                  <div className='diagnostics-list'>
-                    {projectDiagnostics.map((issue, index) => (
-                      <button
-                        key={`${issue.file}-${issue.line}-${issue.title}-${index}`}
-                        onClick={() => {
-                          openProjectFile(issue.file);
-                          jumpToCodeLocation(
-                            issue.file,
-                            issue.line,
-                            issue.line,
-                          );
-                          setModal(null);
-                        }}
-                      >
-                        <span
-                          className={`diagnostic-severity diagnostic-${issue.severity ?? "warning"}`}
-                        >
-                          {issue.severity ?? "warning"}
-                        </span>
-                        <b>{issue.title}</b>
-                        <small>
-                          {issue.file} · Line {issue.line}
-                        </small>
-                        <p>{issue.detail}</p>
-                      </button>
-                    ))}
-                  </div>
+                  <>
+                    <div className='diagnostics-summary' aria-label='Diagnostic summary'>
+                      <button className={diagnosticSeverity === "all" ? "active" : ""} onClick={() => setDiagnosticSeverity("all")}><b>{projectDiagnostics.length}</b><span>All issues</span></button>
+                      <button className={`severity-error ${diagnosticSeverity === "error" ? "active" : ""}`} onClick={() => setDiagnosticSeverity("error")}><b>{diagnosticSummary.error}</b><span>Errors</span></button>
+                      <button className={`severity-warning ${diagnosticSeverity === "warning" ? "active" : ""}`} onClick={() => setDiagnosticSeverity("warning")}><b>{diagnosticSummary.warning}</b><span>Warnings</span></button>
+                      <button className={`severity-info ${diagnosticSeverity === "info" ? "active" : ""}`} onClick={() => setDiagnosticSeverity("info")}><b>{diagnosticSummary.info}</b><span>Information</span></button>
+                    </div>
+                    <label className='diagnostics-search'><Search aria-hidden='true' /><input value={diagnosticQuery} onChange={(event) => setDiagnosticQuery(event.target.value)} placeholder='Search file, error, rule, or message…' /></label>
+                    <div className='diagnostics-groups'>
+                      {groupedDiagnostics.length ? groupedDiagnostics.map((group, groupIndex) => (
+                        <details key={group.file} open={groupIndex < 2}>
+                          <summary>
+                            <FileWarning aria-hidden='true' />
+                            <span><b>{group.file.split("/").at(-1)}</b><small>{group.file}</small></span>
+                            <span className='diagnostic-file-counts'>{group.errors > 0 && <i className='error'>{group.errors} error{group.errors === 1 ? "" : "s"}</i>}{group.warnings > 0 && <i className='warning'>{group.warnings} warning{group.warnings === 1 ? "" : "s"}</i>}<em>{group.issues.length}</em></span>
+                            <ChevronDown aria-hidden='true' />
+                          </summary>
+                          <div>
+                            {group.issues.map((issue, index) => (
+                              <button key={`${issue.file}-${issue.line}-${issue.title}-${index}`} onClick={() => { openProjectFile(issue.file); jumpToCodeLocation(issue.file, issue.line, issue.line); setModal(null); }}>
+                                <span className={`diagnostic-marker diagnostic-${issue.severity ?? "warning"}`}><AlertTriangle aria-hidden='true' /></span>
+                                <span className='diagnostic-copy'>
+                                  <span className='diagnostic-heading'><b>{issue.title}</b><span className={`diagnostic-severity diagnostic-${issue.severity ?? "warning"}`}>{issue.severity ?? "warning"}</span></span>
+                                  <p>{issue.detail}</p>
+                                  <span className='diagnostic-meta'><strong>Line {issue.line}{issue.column ? `:${issue.column}` : ""}</strong>{issue.source && <em>{issue.source}</em>}{issue.ruleId && <code>{issue.ruleId}</code>}</span>
+                                </span>
+                                <ChevronRight aria-hidden='true' />
+                              </button>
+                            ))}
+                          </div>
+                        </details>
+                      )) : <div className='diagnostics-empty-filter'><Search aria-hidden='true' /><b>No matching diagnostics</b><small>Try another search or severity filter.</small></div>}
+                    </div>
+                  </>
                 ) : (
                   <div className='no-ignored-files'>
                     ✓ This analysis looks healthy.
@@ -5349,8 +5137,7 @@ export function ComponentAtlas({
                 </button>
               </>
             )}
-          </section>
-        </div>
+        </DialogShell>
       )}
       {showOnboarding && showWorkspace && (
         <section

@@ -69,6 +69,8 @@ export type ProjectWorkspace = {
   nodes: GraphNode[];
   edges: GraphEdge[];
   details: Record<string, NodeDetail>;
+  /** Complete analyzer findings, including issues that are not attached to a graph node. */
+  issues?: AnalysisIssue[];
   githubSourceBase: string;
   openFiles: string[];
   activeFile: string;

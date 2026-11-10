@@ -33,6 +33,7 @@ export type CloudProject = {
   nodes: unknown[];
   edges: unknown[];
   details: Record<string, unknown>;
+  issues?: unknown[];
   githubSourceBase: string;
   openFiles: string[];
   activeFile: string;

@@ -31,7 +31,7 @@ export type SemanticAnalysis = {
 };
 
 const SOURCE_FILE_PATTERN = /\.(tsx?|jsx?)$/i;
-const CONFIG_FILE_PATTERN = /(^|\/)tsconfig(?:\.[^/]+)?\.json$/i;
+const CONFIG_FILE_PATTERN = /(^|\/)(?:tsconfig(?:\.[^/]+)?|jsconfig)\.json$/i;
 const TOOL_CONFIG_PATTERN = /(^|\/)(vite|webpack|rollup|next|astro|remix|babel|eslint)\.config\.[cm]?[jt]s$/i;
 const IGNORED_DIAGNOSTIC_CODES = new Set([
   2307, // External package declarations are intentionally not loaded.
@@ -95,14 +95,17 @@ function compilerOptions(sources: Record<string, string>, issues: AnalyzerIssue[
     paths: { "@/*": ["src/*"], "~/*": ["src/*"] },
     types: [],
   };
-  const configFile = Object.keys(sources).find((file) => CONFIG_FILE_PATTERN.test(file));
+  const configFile = Object.keys(sources)
+    .filter((file) => CONFIG_FILE_PATTERN.test(file))
+    .sort((left, right) => left.split("/").length - right.split("/").length || left.localeCompare(right))[0];
   if (!configFile) return defaults;
   const parsed = ts.parseConfigFileTextToJson(configFile, sources[configFile]);
   if (parsed.error) {
     issues.push({ title: "Invalid TypeScript configuration", file: configFile, line: 1, detail: ts.flattenDiagnosticMessageText(parsed.error.messageText, "\n"), source: "typescript", severity: "error" });
     return defaults;
   }
-  const converted = ts.convertCompilerOptionsFromJson(parsed.config?.compilerOptions ?? {}, "/", configFile);
+  const configDirectory = `/${normalizePath(configFile).split("/").slice(0, -1).join("/")}`.replace(/\/$/, "") || "/";
+  const converted = ts.convertCompilerOptionsFromJson(parsed.config?.compilerOptions ?? {}, configDirectory, configFile);
   converted.errors.forEach((error) => issues.push({ title: "Invalid TypeScript configuration", file: configFile, line: 1, detail: ts.flattenDiagnosticMessageText(error.messageText, "\n"), source: "typescript", severity: "error" }));
   return {
     ...defaults,

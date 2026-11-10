@@ -2,6 +2,7 @@
 
 import AnalyzerWorker from "./worker?worker";
 import type { AnalysisResult, AnalyzerProgress } from "./index";
+import { ensureAnalyzerBrowserRuntime } from "./browser-runtime";
 
 type AnalysisResponse = { id: number; result?: AnalysisResult; error?: string; progress?: AnalyzerProgress };
 type PendingAnalysis = { resolve: (result: AnalysisResult) => void; reject: (error: Error) => void; onProgress?: (progress: AnalyzerProgress) => void };
@@ -48,7 +49,10 @@ function getAnalyzerWorker() {
 
 export async function analyzeProjectSources(sources: Record<string, string>, onProgress?: (progress: AnalyzerProgress) => void) {
   const worker = getAnalyzerWorker();
-  if (!worker) return (await import("./index")).analyzeProjectSources(sources, onProgress);
+  if (!worker) {
+    ensureAnalyzerBrowserRuntime();
+    return (await import("./index")).analyzeProjectSources(sources, onProgress);
+  }
   const id = nextRequestId++;
   try {
     return await new Promise<AnalysisResult>((resolve, reject) => {
@@ -62,6 +66,7 @@ export async function analyzeProjectSources(sources: Record<string, string>, onP
     });
   } catch (error) {
     if (error instanceof Error && error.message === "Analysis cancelled") throw error;
+    ensureAnalyzerBrowserRuntime();
     return (await import("./index")).analyzeProjectSources(sources, onProgress);
   }
 }

@@ -19,11 +19,15 @@ export const HighlightedCode = memo(function HighlightedCode({
   highlightedLine = 0,
   highlightedEndLine = highlightedLine,
   diagnostics = [],
+  searchQuery = "",
+  activeSearchLine = 0,
 }: {
   source: string;
   highlightedLine?: number;
   highlightedEndLine?: number;
   diagnostics?: AnalysisIssue[];
+  searchQuery?: string;
+  activeSearchLine?: number;
 }) {
   const diagnosticsByLine = new Map(
     diagnostics.map((diagnostic) => [diagnostic.line, diagnostic]),
@@ -53,10 +57,12 @@ export const HighlightedCode = memo(function HighlightedCode({
         if (cursor < line.length) parts.push(line.slice(cursor));
         const lineNumber = lineIndex + 1;
         const isHighlighted = highlightedLine > 0 && lineNumber >= highlightedLine && lineNumber <= Math.max(highlightedLine, highlightedEndLine);
+        const isSearchMatch = Boolean(searchQuery) && line.toLocaleLowerCase().includes(searchQuery.toLocaleLowerCase());
+        const isActiveSearchMatch = isSearchMatch && lineNumber === activeSearchLine;
         const diagnostic = diagnosticsByLine.get(lineNumber);
         return (
           <span
-            className={`syntax-line ${isHighlighted ? "highlighted" : ""} ${diagnostic ? `has-diagnostic diagnostic-${diagnostic.severity ?? "error"}` : ""} ${isHighlighted && lineNumber === highlightedLine ? "range-start" : ""} ${isHighlighted && lineNumber === Math.max(highlightedLine, highlightedEndLine) ? "range-end" : ""}`}
+            className={`syntax-line ${isHighlighted ? "highlighted" : ""} ${isSearchMatch ? "search-match" : ""} ${isActiveSearchMatch ? "active-search-match" : ""} ${diagnostic ? `has-diagnostic diagnostic-${diagnostic.severity ?? "error"}` : ""} ${isHighlighted && lineNumber === highlightedLine ? "range-start" : ""} ${isHighlighted && lineNumber === Math.max(highlightedLine, highlightedEndLine) ? "range-end" : ""}`}
             data-line={lineNumber}
             key={lineNumber}
             title={diagnostic ? `${diagnostic.title}: ${diagnostic.detail}` : undefined}
