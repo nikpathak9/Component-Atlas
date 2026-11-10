@@ -2957,64 +2957,72 @@ textarea:focus-visible {
   min-height: 120px;
   max-height: 48vh;
   overflow: auto;
-  display: grid;
-  align-content: start;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
   gap: 8px;
   margin: 10px 0 14px;
   padding-right: 4px;
 }
-.diagnostics-groups details {
+.diagnostic-group {
+  flex: 0 0 auto;
+  min-height: 60px;
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: #0c1922;
 }
-.diagnostics-groups summary {
+.diagnostic-group-toggle {
+  width: 100%;
   min-height: 58px;
   display: grid;
   grid-template-columns: 34px minmax(0, 1fr) auto 16px;
   align-items: center;
   gap: 10px;
   padding: 9px 12px;
-  cursor: pointer;
-  list-style: none;
-}
-.diagnostics-groups summary::-webkit-details-marker {
-  display: none;
-}
-.diagnostics-groups summary > svg:first-child {
-  width: 19px;
-  color: #efb857;
-}
-.diagnostics-groups summary > svg:last-child {
-  width: 14px;
-  color: var(--muted);
-  transition: transform 0.16s ease;
-}
-.diagnostics-groups details[open] summary > svg:last-child {
-  transform: rotate(180deg);
-}
-.diagnostics-groups summary > span:nth-child(2),
-.diagnostics-groups summary b,
-.diagnostics-groups summary small {
-  min-width: 0;
-  display: block;
-}
-.diagnostics-groups summary b {
-  overflow: hidden;
+  border: 0;
+  background: transparent;
   color: var(--text);
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  text-align: left;
+  cursor: pointer;
 }
-.diagnostics-groups summary small {
-  overflow: hidden;
-  margin-top: 3px;
-  color: var(--muted);
-  font: 9px "JetBrains Mono";
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.diagnostic-group-toggle:hover { background: #10251f; }
+.diagnostic-group-toggle > svg:first-child { width: 19px; color: #efb857; }
+.diagnostic-group-toggle > svg:last-child { width: 14px; color: var(--muted); transition: transform .16s ease; }
+.diagnostic-group.is-open .diagnostic-group-toggle > svg:last-child { transform: rotate(180deg); }
+.diagnostic-group-toggle > span:nth-child(2),
+.diagnostic-group-toggle b,
+.diagnostic-group-toggle small { min-width: 0; display: block; }
+.diagnostic-group-toggle b { overflow: hidden; color: var(--text); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.diagnostic-group-toggle small { overflow: hidden; margin-top: 3px; color: var(--muted); font: 9px "JetBrains Mono"; text-overflow: ellipsis; white-space: nowrap; }
+.diagnostic-group-issues { border-top: 1px solid var(--line); }
+.diagnostic-group-issues > button {
+  width: 100%;
+  min-height: 92px;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) 16px;
+  align-items: start;
+  gap: 10px;
+  padding: 12px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
 }
+.diagnostic-group-issues > button:hover { background: #10251f; }
+.diagnostic-group-issues > button > svg { width: 15px; align-self: center; color: var(--muted); }
+.diagnostic-group-issues > .diagnostic-load-more {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--mint);
+  font-size: 11px;
+  font-weight: 700;
+}
+.diagnostic-load-more small { color: var(--muted); font-size: 9px; font-weight: 500; }
 .diagnostic-file-counts {
   display: flex;
   align-items: center;
@@ -3046,29 +3054,6 @@ textarea:focus-visible {
   color: var(--text);
   font: 700 9px "JetBrains Mono";
   font-style: normal;
-}
-.diagnostics-groups details > div {
-  border-top: 1px solid var(--line);
-}
-.diagnostics-groups details > div > button {
-  width: 100%;
-  min-height: 92px;
-  display: grid;
-  grid-template-columns: 30px minmax(0, 1fr) 16px;
-  align-items: start;
-  gap: 10px;
-  padding: 12px;
-  border: 0;
-  border-bottom: 1px solid var(--line);
-  background: transparent;
-  color: var(--text);
-  text-align: left;
-}
-.diagnostics-groups details > div > button:last-child {
-  border-bottom: 0;
-}
-.diagnostics-groups details > div > button:hover {
-  background: #10251f;
 }
 .diagnostic-marker {
   width: 28px;
@@ -3145,11 +3130,6 @@ textarea:focus-visible {
 .diagnostic-meta code {
   background: #2b2238;
   color: #caa1f1;
-}
-.diagnostics-groups details > div > button > svg {
-  width: 15px;
-  align-self: center;
-  color: var(--muted);
 }
 .diagnostics-empty-filter {
   min-height: 145px;
@@ -11170,17 +11150,14 @@ html[data-app-theme="light"] .session-restore-page p {
   border-color: #119b83;
   background: #eaf7f3;
 }
-.light-theme .diagnostics-search,
-.light-theme .diagnostics-groups details {
+.light-theme .diagnostics-search {
   border-color: #d7e3e7;
   background: #f8fafb;
 }
-.light-theme .diagnostics-groups details > div > button {
-  border-color: #dfe8eb;
-}
-.light-theme .diagnostics-groups details > div > button:hover {
-  background: #eaf7f3;
-}
+.light-theme .diagnostic-group { border-color: #d7e3e7; background: #f8fafb; }
+.light-theme .diagnostic-group-toggle:hover,
+.light-theme .diagnostic-group-issues > button:hover { background: #eaf7f3; }
+.light-theme .diagnostic-group-issues { border-color: #dfe8eb; }
 .light-theme .diagnostic-copy > p {
   color: #526873;
 }

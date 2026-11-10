@@ -641,6 +641,8 @@ export function ComponentAtlas({
   const [collapsedGraphGroups, setCollapsedGraphGroups] = useState<Set<string>>(() => new Set());
   const [diagnosticQuery, setDiagnosticQuery] = useState("");
   const [diagnosticSeverity, setDiagnosticSeverity] = useState<"all" | "error" | "warning" | "info">("all");
+  const [expandedDiagnosticFiles, setExpandedDiagnosticFiles] = useState<Set<string>>(() => new Set(["__first__"]));
+  const [diagnosticGroupLimits, setDiagnosticGroupLimits] = useState<Record<string, number>>({});
   const {
     explorerWidth,
     setExplorerWidth,
@@ -5026,16 +5028,32 @@ export function ComponentAtlas({
                     </div>
                     <label className='diagnostics-search'><Search aria-hidden='true' /><input value={diagnosticQuery} onChange={(event) => setDiagnosticQuery(event.target.value)} placeholder='Search file, error, rule, or message…' /></label>
                     <div className='diagnostics-groups'>
-                      {groupedDiagnostics.length ? groupedDiagnostics.map((group, groupIndex) => (
-                        <details key={group.file} open={groupIndex < 2}>
-                          <summary>
+                      {groupedDiagnostics.length ? groupedDiagnostics.map((group, groupIndex) => {
+                        const defaultExpanded = expandedDiagnosticFiles.has("__first__") && groupIndex === 0;
+                        const expanded = defaultExpanded || expandedDiagnosticFiles.has(group.file);
+                        const visibleLimit = diagnosticGroupLimits[group.file] ?? 30;
+                        const visibleIssues = expanded ? group.issues.slice(0, visibleLimit) : [];
+                        return (
+                        <article className={`diagnostic-group ${expanded ? "is-open" : ""}`} key={group.file}>
+                          <button
+                            className='diagnostic-group-toggle'
+                            type='button'
+                            aria-expanded={expanded}
+                            onClick={() => setExpandedDiagnosticFiles((current) => {
+                              const next = new Set(current);
+                              const wasDefaultExpanded = next.delete("__first__") && groupIndex === 0;
+                              if (next.has(group.file)) next.delete(group.file);
+                              else if (!wasDefaultExpanded) next.add(group.file);
+                              return next;
+                            })}
+                          >
                             <FileWarning aria-hidden='true' />
                             <span><b>{group.file.split("/").at(-1)}</b><small>{group.file}</small></span>
                             <span className='diagnostic-file-counts'>{group.errors > 0 && <i className='error'>{group.errors} error{group.errors === 1 ? "" : "s"}</i>}{group.warnings > 0 && <i className='warning'>{group.warnings} warning{group.warnings === 1 ? "" : "s"}</i>}<em>{group.issues.length}</em></span>
                             <ChevronDown aria-hidden='true' />
-                          </summary>
-                          <div>
-                            {group.issues.map((issue, index) => (
+                          </button>
+                          {expanded && <div className='diagnostic-group-issues'>
+                            {visibleIssues.map((issue, index) => (
                               <button key={`${issue.file}-${issue.line}-${issue.title}-${index}`} onClick={() => { openProjectFile(issue.file); jumpToCodeLocation(issue.file, issue.line, issue.line); setModal(null); }}>
                                 <span className={`diagnostic-marker diagnostic-${issue.severity ?? "warning"}`}><AlertTriangle aria-hidden='true' /></span>
                                 <span className='diagnostic-copy'>
@@ -5046,9 +5064,15 @@ export function ComponentAtlas({
                                 <ChevronRight aria-hidden='true' />
                               </button>
                             ))}
-                          </div>
-                        </details>
-                      )) : <div className='diagnostics-empty-filter'><Search aria-hidden='true' /><b>No matching diagnostics</b><small>Try another search or severity filter.</small></div>}
+                            {group.issues.length > visibleIssues.length && <button
+                              className='diagnostic-load-more'
+                              type='button'
+                              onClick={() => setDiagnosticGroupLimits((current) => ({ ...current, [group.file]: visibleLimit + 30 }))}
+                            >Show 30 more <small>{group.issues.length - visibleIssues.length} remaining</small></button>}
+                          </div>}
+                        </article>
+                      );
+                      }) : <div className='diagnostics-empty-filter'><Search aria-hidden='true' /><b>No matching diagnostics</b><small>Try another search or severity filter.</small></div>}
                     </div>
                   </>
                 ) : (
